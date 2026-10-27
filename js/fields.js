@@ -2,26 +2,33 @@
 // Zatím pravidla (jednotka + rozsah hodnot + klíčová slova); potvrzené příklady z tréninku
 // poslouží k natrénování sítě, která pozná, který nápis je který údaj.
 
-import { numberCandidates, digitsOnly, formatNumber, isCompleteNumber } from './model.js';
+import { numberCandidates, digitsOnly, formatNumber, isCompleteNumber, BLOCKS } from './model.js';
 
 /**
  * Kroky tréninku v pořadí obchůzky. type: number = číslo vozu, qty = číslo s jednotkou,
- * switch = poloha přestavovače, text = volný text. wagonKey = kam se hodnota uloží k vozu.
+ * switch = volba tlačítkem (přestavovače, nápravy, špalíky), text = volný text.
+ * wagonKey = kam se hodnota uloží k vozu (numeric = jako číslo), default = předvolená volba.
  */
 export const FIELDS = [
   { key: 'cislo', title: 'Číslo vozu', hint: '12místné číslo na boku vozu', type: 'number' },
+  { key: 'axles', title: 'Počet náprav', hint: 'spočítejte nápravy (dvojkolí) vozu', type: 'switch',
+    options: [['2', '2'], ['3', '3'], ['4', '4'], ['6', '6'], ['8', '8']], default: '4', wagonKey: 'axles', numeric: true },
   { key: 'tare', title: 'Hmotnost vozu', hint: 'vlastní hmotnost (tara), např. 23 500 kg', type: 'qty', unit: 'kg', wagonKey: 'tare_kg' },
   { key: 'hand_t', title: 'Síla zajišťovací brzdy', hint: 'brzdicí váha ruční brzdy v tunách, např. 20 t', type: 'qty', unit: 't', wagonKey: 'hand_bw_t' },
   { key: 'hand_kn', title: 'Zajišťovací síla', hint: 'v kN, např. 20,2 kN', type: 'qty', unit: 'kN', wagonKey: 'hand_force_kn' },
   { key: 'length', title: 'Délka přes nárazníky', hint: 'v metrech, např. 15,74 m', type: 'qty', unit: 'm', wagonKey: 'length_m' },
-  { key: 'rezim', title: 'Přestavovač G/P', hint: 'páka režimu brzdění', type: 'switch', options: [['G', 'G'], ['P', 'P']] },
+  { key: 'speed', title: 'Nejvyšší dovolená rychlost', hint: 'v km/h, např. 100 nebo 120 (S / SS v tabulce zatížení)',
+    type: 'qty', unit: 'km/h', wagonKey: 'max_speed' },
+  { key: 'blocks', title: 'Druh brzdových špalíků', hint: 'K, L, LL nekovové · D kotoučová brzda · F litinové', type: 'switch',
+    options: BLOCKS.map(([v, l]) => [v, l]), wagonKey: 'blocks' },
+  { key: 'rezim', title: 'Přestavovač G/P', hint: 'páka režimu brzdění', type: 'switch', options: [['G', 'G'], ['P', 'P']], default: 'P' },
   { key: 'naklad', title: 'Přestavovač prázdný / ložený', hint: 'páka prázdný – ložený', type: 'switch',
-    options: [['prazdny', 'Prázdný'], ['lozeny', 'Ložený'], ['auto', 'Samočinný']] },
+    options: [['prazdny', 'Prázdný'], ['lozeny', 'Ložený'], ['auto', 'Samočinný']], default: 'prazdny' },
   { key: 'revize', title: 'Revize', hint: 'nápis REV s dílnou a datem', type: 'text', wagonKey: 'revision' },
 ];
 
-// Číslo s jednotkou: „23 500 kg“, „23.500 kg“, „20,0t“, „20,2 kN“, „15,74 m“.
-const QTY = /(\d{1,3}(?:[ .]\d{3})+|\d+)(?:[,.](\d{1,2}))?\s?(kg|kn|t|m)(?![a-z])/gi;
+// Číslo s jednotkou: „23 500 kg“, „23.500 kg“, „20,0t“, „20,2 kN“, „15,74 m“, „100 km/h“.
+const QTY = /(\d{1,3}(?:[ .]\d{3})+|\d+)(?:[,.](\d{1,2}))?\s?(kg|kn|km\/h|t|m)(?![a-z])/gi;
 
 // Síť někdy rozdělí jeden nápis na víc rámečků („23 500“ a „kg“). Sousední rámečky v jednom řádku
 // s malou mezerou se proto spojí do jedné fráze; li = indexy řádků, ze kterých fráze vznikla.
@@ -74,6 +81,7 @@ const RULES = {
   hand_t: (q) => (q.unit === 't' && q.v >= 3 && q.v <= 60 ? 1 + (numbersInLine(q.text) === 1 ? 2 : 0) : 0),
   hand_kn: (q) => (q.unit === 'kN' && q.v >= 3 && q.v <= 200 ? 3 : 0),
   length: (q) => (q.unit === 'm' && q.v >= 5 && q.v <= 40 ? 1 + (q.decimals ? 2 : 0) : 0),
+  speed: (q) => (q.unit === 'km/h' && q.v >= 10 && q.v <= 200 ? 3 : 0),
 };
 
 const REV = /\bREV\b|R[EÉ]V[\s.:]/i;
@@ -94,7 +102,19 @@ export function extractField(field, lines) {
       const score = RULES[field.key](q);
       if (score > 0 && (!best || score > best.score)) best = { value: String(inUnit(q, field.unit)), lines: q.li, score };
     }
+    // rychlost bez „km/h“: řádek tabulky zatížení SS = 120 km/h, S = 100 km/h
+    if (!best && field.key === 'speed') {
+      const ss = lines.findIndex((l) => /(^|\s)SS(\s|$)/.test(l.text));
+      const s1 = lines.findIndex((l) => /(^|\s)S(\s|$)/.test(l.text));
+      if (ss >= 0) best = { value: '120', lines: [ss], score: 1 };
+      else if (s1 >= 0) best = { value: '100', lines: [s1], score: 1 };
+    }
     return best;
+  }
+  // označení špalíků bývá samostatné písmeno u brzdy (LL, K, L)
+  if (field.key === 'blocks') {
+    const li = lines.findIndex((l) => /^(LL|K|L)$/.test(l.text.trim()));
+    return li < 0 ? null : { value: lines[li].text.trim(), lines: [li] };
   }
   if (field.key === 'revize') {
     const li = lines.findIndex((l) => REV.test(l.text));
@@ -142,6 +162,7 @@ export function displayValue(field, value) {
   if (!value) return '';
   if (field.type === 'number') return formatNumber(value);
   if (field.type === 'qty') return `${Number(value).toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} ${field.unit}`;
+  if (field.key === 'axles') return `${value} náprav${Number(value) <= 4 ? 'y' : ''}`;
   if (field.type === 'switch') return field.options.find(([v]) => v === value)?.[1] ?? value;
   return value;
 }

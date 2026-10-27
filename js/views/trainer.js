@@ -94,22 +94,13 @@ export function Trainer({ onClose }) {
       setCamera('live');
       await loadOcr().catch(() => {});
       while (!stopped) {
-        const { step: s, frozen: fz, touched: t } = live.current;
+        const { step: s, frozen: fz } = live.current;
         if (fz || s >= FIELDS.length || video.readyState < 2) { await sleep(150); continue; }
         const c = grabFrame(video, video.videoWidth, video.videoHeight);
         const lines = await readText(c).catch(() => []);
         if (stopped || live.current.frozen || live.current.step !== s) continue;
         setFrame({ canvas: c, lines, w: c.width, h: c.height });
-        const f = FIELDS[s];
-        if (f.type === 'switch') {
-          const p = await predictSwitch(f.key, c).catch(() => null);
-          setPred(p);
-          if (p && !live.current.touched) setChoice(p.label);
-        } else {
-          const found = extractField(f, lines);
-          setCand(found);
-          if (found && !t) setInput(editable(f, found.value));
-        }
+        await suggest(FIELDS[s], c, lines);
         await sleep(60);
       }
     })();
@@ -136,6 +127,23 @@ export function Trainer({ onClose }) {
     if (values.cislo) db.wagon(values.cislo).then((w) => setKnown(w ?? null));
   }, [values.cislo]);
 
+  // Návrh hodnoty kroku: u voleb natrénovaná síť (pokud už je), jinak pravidlo nad přečteným textem.
+  // Co vozmistr už sám zvolil nebo napsal, se nepřepíše.
+  async function suggest(f, canvas, lines) {
+    if (f.type === 'switch') {
+      const p = await predictSwitch(f.key, canvas).catch(() => null);
+      const found = p ? null : extractField(f, lines);
+      setPred(p);
+      setCand(found);
+      const v = p?.label ?? found?.value;
+      if (v && !live.current.touched) setChoice(v);
+    } else {
+      const found = extractField(f, lines);
+      setCand(found);
+      if (found && !live.current.touched) setInput(editable(f, found.value));
+    }
+  }
+
   function resetStep(next, vals = values) {
     setStep(next);
     setFrozen(false);
@@ -147,7 +155,7 @@ export function Trainer({ onClose }) {
     const prev = f ? vals[f.key] : null;
     setInput(f && prev ? editable(f, prev) : '');
     setTouched(Boolean(prev));
-    if (f?.type === 'switch') setChoice(prev ?? (f.key === 'rezim' ? 'P' : 'prazdny'));
+    if (f?.type === 'switch') setChoice(prev ?? f.default ?? null);
   }
 
   function freeze() {
@@ -170,22 +178,22 @@ export function Trainer({ onClose }) {
       const lines = await readText(c);
       setFrame({ canvas: c, lines, w: c.width, h: c.height });
       setFrozen(true);
-      if (field.type === 'switch') {
-        const p = await predictSwitch(field.key, c).catch(() => null);
-        setPred(p);
-        if (p && !touched) setChoice(p.label);
-      } else {
-        const found = extractField(field, lines);
-        setCand(found);
-        if (found && !touched) setInput(editable(field, found.value));
-      }
+      await suggest(field, c, lines);
     } catch (e) {
       toast(`Fotku se nepodařilo přečíst: ${e.message}`);
     }
     setBusy(false);
   }
 
+  // dvojité ťuknutí na Potvrdit nesmí uložit snímek dvakrát
+  const saving = useRef(false);
   async function confirm() {
+    if (saving.current) return;
+    saving.current = true;
+    try { await confirmStep(); } finally { saving.current = false; }
+  }
+
+  async function confirmStep() {
     const value = field.type === 'switch' ? choice : normalizeValue(field, input);
     if (!isValidValue(field, value)) {
       toast(field.type === 'number' ? 'Číslo vozu musí mít 12 číslic.' : 'Zadejte hodnotu, nebo zvolte „Na voze není“.');
@@ -234,7 +242,7 @@ export function Trainer({ onClose }) {
   async function saveWagon() {
     if (!values.cislo) { toast('Bez čísla vozu se údaje k vozu neuloží.'); return newWagon(); }
     const w = { ...(await db.wagon(values.cislo)), number: values.cislo, updated_at: new Date().toISOString() };
-    for (const f of FIELDS) if (f.wagonKey && values[f.key] != null) w[f.wagonKey] = f.type === 'qty' ? Number(values[f.key]) : values[f.key];
+    for (const f of FIELDS) if (f.wagonKey && values[f.key] != null) w[f.wagonKey] = f.type === 'qty' || f.numeric ? Number(values[f.key]) : values[f.key];
     await db.saveWagon(w);
     toast(`Vůz ${formatNumber(values.cislo)} uložen.`);
     newWagon();
@@ -273,10 +281,9 @@ export function Trainer({ onClose }) {
           ${FIELDS.map((f, i) => html`<button type="button" class=${`stepchip ${i === step ? 'on' : values[f.key] !== undefined ? 'ok' : ''}`}
             onClick=${() => resetStep(i)}>${i + 1}</button>`)}
         </div>
-        <span class="savedcount">${saved} ✓</span>
       </div>
       ${!done && html`<div class="ask">
-        <div class="ask-n">${step + 1} / ${FIELDS.length}</div>
+        <div class="ask-n">${step + 1} / ${FIELDS.length} · uloženo snímků: ${saved}</div>
         <div class="ask-title">${field.title}</div>
         <div class="ask-hint">${!ready ? 'Načítám rozpoznávání…' : field.hint}</div>
       </div>`}
@@ -298,7 +305,10 @@ export function Trainer({ onClose }) {
           ${field.type === 'switch'
             ? html`<${Seg} value=${choice} options=${field.options} onChange=${(v) => { setChoice(v); setTouched(true); }} />
                 <div class="hint">${pred ? html`Síť odhaduje <b>${displayValue(field, pred.label)}</b> (${Math.round(pred.prob * 100)} %).`
-                  : 'Namiřte na páku a zvolte, v jaké je poloze – snímek se uloží pro trénink.'}</div>`
+                  : cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>.`
+                  : field.key === 'rezim' || field.key === 'naklad' ? 'Namiřte na páku a zvolte, v jaké je poloze – snímek se uloží pro trénink.'
+                  : 'Namiřte kameru a zvolte tlačítkem – snímek se uloží pro trénink.'}
+                  ${knownValue && html` · v paměti: ${knownValue}`}</div>`
             : html`<input class="input bigvalue" value=${input} inputmode=${field.type === 'text' ? 'text' : 'decimal'}
                   placeholder=${field.type === 'number' ? '33 54 6955 012-3' : 'nenalezeno'}
                   onFocus=${freeze}

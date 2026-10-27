@@ -1,12 +1,19 @@
 // Fotky pro trénink sítí: přehled, export do ZIPu (pro Google Disk a sešit v Colabu), úklid.
 
 import { html, useEffect, useState } from '../../vendor/preact-htm.js';
-import { SWITCHES, optionLabel, plural } from '../model.js';
+import { SWITCHES, plural } from '../model.js';
 import { FIELDS } from '../fields.js';
 import { db } from '../db.js';
 import { brakeModels } from '../brake.js';
 import { zip, download } from '../xlsx.js';
 import { Topbar, Icon, toast } from '../ui.js';
+
+// Druhy s volbou tlačítkem (přestavovače, nápravy, špalíky): fotky po složkách podle polohy, počty po polohách.
+const OPTIONS = {
+  ...Object.fromEntries(Object.entries(SWITCHES).map(([k, s]) => [k, s.options])),
+  ...Object.fromEntries(FIELDS.filter((f) => f.type === 'switch').map((f) => [f.key, f.options])),
+};
+const optionText = (kind, v) => OPTIONS[kind]?.find(([x]) => x === v)?.[1] ?? v;
 
 const KINDS = {
   ...Object.fromEntries(FIELDS.map((f) => [f.key, f.title])),
@@ -25,7 +32,7 @@ async function buildZip(samples) {
   const files = [];
   const csv = [['soubor', 'druh', 'hodnota', 'vuz', 'porizeno', 'zdroj', 'odhad', 'jistota'].join(';')];
   for (const s of samples) {
-    const dir = SWITCHES[s.kind] ? `${s.kind}/${s.label}` : s.kind;
+    const dir = OPTIONS[s.kind] ? `${s.kind}/${s.label}` : s.kind;
     const name = `${dir}/${s.id}.jpg`;
     files.push({ name, data: new Uint8Array(await s.blob.arrayBuffer()) });
     if (s.ocr) {
@@ -54,7 +61,7 @@ export function DataView() {
   for (const s of samples) {
     const g = (groups[s.kind] ??= { total: 0, labels: {} });
     g.total++;
-    if (SWITCHES[s.kind]) g.labels[s.label] = (g.labels[s.label] ?? 0) + 1;
+    if (OPTIONS[s.kind]) g.labels[s.label] = (g.labels[s.label] ?? 0) + 1;
   }
 
   async function exportZip(list) {
@@ -75,6 +82,14 @@ export function DataView() {
       toast(`Export se nepovedl: ${e.message}`);
     }
     setBusy(false);
+  }
+
+  async function removeAll() {
+    if (!samples.length) return;
+    if (!confirm(`Smazat z telefonu všech ${plural(samples.length, 'fotku', 'fotky', 'fotek')} pro trénink? Vrátit to nejde.`)) return;
+    for (const s of samples) await db.deleteSample(s.id);
+    toast('Fotky pro trénink smazány.');
+    await load();
   }
 
   async function removeExported() {
@@ -98,14 +113,14 @@ export function DataView() {
         return html`<div class="card">
           <div class="row">
             <h2 style="margin:0;flex:1">${title}</h2>
-            ${SWITCHES[kind] && (models[kind]
+            ${OPTIONS[kind] && (models[kind]
               ? html`<span class="chip ok"><${Icon} name="brain" size=${14} /> síť nasazena</span>`
               : html`<span class="chip warn">síť zatím není</span>`)}
           </div>
           <div class="chips">
             ${!g ? html`<span class="muted small">žádné fotky</span>`
-              : SWITCHES[kind]
-                ? SWITCHES[kind].options.map(([v]) => html`<span class="chip">${optionLabel(kind, v)}: ${g.labels[v] ?? 0}</span>`)
+              : OPTIONS[kind]
+                ? OPTIONS[kind].map(([v]) => html`<span class="chip">${optionText(kind, v)}: ${g.labels[v] ?? 0}</span>`)
                 : html`<span class="chip">${plural(g.total, 'fotka', 'fotky', 'fotek')}</span>`}
           </div>
         </div>`;
@@ -119,7 +134,11 @@ export function DataView() {
           <button class="btn" disabled=${busy || !samples.length} onClick=${() => exportZip(samples)}>Exportovat vše</button>
         </div>
         <p class="hint">ZIP uložte na Google Disk do složky <b>Vykaz_vozu_data</b> a spusťte sešit <b>trenink_prestavovacu.ipynb</b> v Colabu.</p>
-        <button class="linkbtn small danger" style="margin-top:.4rem" onClick=${removeExported}>Smazat vyexportované fotky z telefonu</button>
+        <div class="row" style="margin-top:.4rem">
+          <button class="linkbtn small danger" onClick=${removeExported}>Smazat vyexportované</button>
+          <span class="spacer"></span>
+          <button class="btn small danger" disabled=${!samples.length} onClick=${removeAll}><${Icon} name="trash" size=${18} /> Smazat všechny fotky</button>
+        </div>
       </div>
     </main>`;
 }
