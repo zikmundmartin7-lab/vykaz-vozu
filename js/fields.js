@@ -5,27 +5,28 @@
 import { numberCandidates, digitsOnly, formatNumber, isCompleteNumber, BLOCKS } from './model.js';
 
 /**
- * Kroky tréninku v pořadí obchůzky. type: number = číslo vozu, qty = číslo s jednotkou,
+ * Kroky tréninku ve výchozím pořadí obchůzky (vozmistr si ho může přetažením změnit, viz trainer.js). type: number = číslo vozu, qty = číslo s jednotkou,
  * switch = volba tlačítkem (přestavovače, nápravy, špalíky), text = volný text.
  * wagonKey = kam se hodnota uloží k vozu (numeric = jako číslo), default = předvolená volba.
  */
 export const FIELDS = [
-  { key: 'cislo', title: 'Číslo vozu', hint: '12místné číslo na boku vozu', type: 'number' },
-  { key: 'axles', title: 'Počet náprav', hint: 'spočítejte nápravy (dvojkolí) vozu', type: 'switch',
+  { key: 'cislo', title: 'Číslo vozu', short: 'Číslo vozu', hint: '12místné číslo na boku vozu', type: 'number' },
+  { key: 'axles', title: 'Počet náprav', short: 'Nápravy', hint: 'spočítejte nápravy (dvojkolí) vozu', type: 'switch',
     options: [['2', '2'], ['3', '3'], ['4', '4'], ['6', '6'], ['8', '8']], default: '4', wagonKey: 'axles', numeric: true },
-  { key: 'tare', title: 'Hmotnost vozu', hint: 'vlastní hmotnost (tara), např. 23 500 kg', type: 'qty', unit: 'kg', wagonKey: 'tare_kg' },
-  { key: 'hand_t', title: 'Síla zajišťovací brzdy', hint: 'brzdicí váha ruční brzdy v tunách, např. 20 t', type: 'qty', unit: 't', wagonKey: 'hand_bw_t' },
-  { key: 'hand_kn', title: 'Zajišťovací síla', hint: 'v kN, např. 20,2 kN', type: 'qty', unit: 'kN', wagonKey: 'hand_force_kn' },
-  { key: 'length', title: 'Délka přes nárazníky', hint: 'v metrech, např. 15,74 m', type: 'qty', unit: 'm', wagonKey: 'length_m' },
-  { key: 'speed', title: 'Nejvyšší dovolená rychlost', hint: 'v km/h, např. 100 nebo 120 (S / SS v tabulce zatížení)',
+  { key: 'tare', title: 'Hmotnost vozu', short: 'Hmotnost', hint: 'vlastní hmotnost (tara), např. 23 500 kg', type: 'qty', unit: 'kg', wagonKey: 'tare_kg' },
+  { key: 'hand_t', title: 'Síla zajišťovací brzdy', short: 'Zaj. brzda (t)', hint: 'brzdicí váha ruční brzdy v tunách, např. 20 t', type: 'qty', unit: 't', wagonKey: 'hand_bw_t' },
+  { key: 'hand_kn', title: 'Zajišťovací síla', short: 'Zaj. síla (kN)', hint: 'v kN, např. 20,2 kN', type: 'qty', unit: 'kN', wagonKey: 'hand_force_kn' },
+  { key: 'length', title: 'Délka přes nárazníky', short: 'Délka', hint: 'v metrech, např. 15,74 m', type: 'qty', unit: 'm', wagonKey: 'length_m' },
+  { key: 'speed', title: 'Nejvyšší dovolená rychlost', short: 'Rychlost', hint: 'v km/h, např. 100 nebo 120 (S / SS v tabulce zatížení)',
     type: 'qty', unit: 'km/h', wagonKey: 'max_speed' },
-  { key: 'blocks', title: 'Druh brzdových špalíků', hint: 'K, L, LL nekovové · D kotoučová brzda · F litinové', type: 'switch',
+  { key: 'blocks', title: 'Druh brzdových špalíků', short: 'Špalíky', hint: 'K, L, LL nekovové · D kotoučová brzda · F litinové', type: 'switch',
     options: BLOCKS.map(([v, l]) => [v, l]), wagonKey: 'blocks' },
-  { key: 'rezim', title: 'Přestavovač G/P', hint: 'páka režimu brzdění', type: 'switch', options: [['G', 'G'], ['P', 'P']], default: 'P' },
-  { key: 'naklad', title: 'Přestavovač prázdný / ložený', hint: 'páka prázdný – ložený', type: 'switch',
+  { key: 'rezim', title: 'Přestavovač G/P', short: 'G/P', hint: 'páka režimu brzdění', type: 'switch', options: [['G', 'G'], ['P', 'P']], default: 'P' },
+  { key: 'naklad', title: 'Přestavovač prázdný / ložený', short: 'Prázdný/ložený', hint: 'páka prázdný – ložený', type: 'switch',
     options: [['prazdny', 'Prázdný'], ['lozeny', 'Ložený'], ['auto', 'Samočinný']], default: 'prazdny' },
-  { key: 'revize', title: 'Revize', hint: 'nápis REV s dílnou a datem', type: 'text', wagonKey: 'revision' },
+  { key: 'revize', title: 'Revize', short: 'Revize', hint: 'nápis REV s dílnou a datem', type: 'text', wagonKey: 'revision' },
 ];
+export const FIELD = Object.fromEntries(FIELDS.map((f) => [f.key, f]));
 
 // Číslo s jednotkou: „23 500 kg“, „23.500 kg“, „20,0t“, „20,2 kN“, „15,74 m“, „100 km/h“.
 const QTY = /(\d{1,3}(?:[ .]\d{3})+|\d+)(?:[,.](\d{1,2}))?\s?(kg|kn|km\/h|t|m)(?![a-z])/gi;

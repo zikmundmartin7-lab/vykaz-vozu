@@ -80,7 +80,7 @@ export function EntryView({ report, entryId, save }) {
 
   useEffect(() => {
     brakeModels().then(setModels);
-    Promise.all((e?.samples ?? []).map((id) => db.sample(id))).then((list) => setPhotos(list.filter(Boolean)));
+    Promise.all((e?.samples ?? []).map((id) => db.sample(id))).then((list) => setPhotos(list.filter((x) => x && !x.deleted_at)));
     return () => { commit(); };   // odchod z obrazovky uloží i rozepsanou změnu
   }, []);
 
@@ -133,7 +133,7 @@ export function EntryView({ report, entryId, save }) {
   }
 
   async function removePhoto(s) {
-    await db.deleteSample(s.id);
+    await db.trashSample(s);
     setPhotos((x) => x.filter((p) => p.id !== s.id));
     setE((prev) => ({ ...prev, samples: prev.samples.filter((id) => id !== s.id) }));
   }
@@ -167,7 +167,7 @@ export function EntryView({ report, entryId, save }) {
   const thumbs = (kind) => photos.filter((s) => s.kind === kind);
   const thumbRow = (kind) => thumbs(kind).length > 0 && html`<div class="thumbs">
     ${thumbs(kind).map((s) => html`<button class="linkbtn" style="padding:0" title="Smazat fotku"
-      onClick=${() => confirm('Smazat tuto fotku?') && removePhoto(s)}><${BlobImg} blob=${s.blob} /></button>`)}
+      onClick=${() => confirm('Přesunout tuto fotku do koše?') && removePhoto(s)}><${BlobImg} blob=${s.blob} /></button>`)}
   </div>`;
   const photoBtn = (kind, label, icon = 'camera') => html`<${PhotoButton} class="btn small"
     onPhoto=${(f) => addPhoto(kind, f)} disabled=${busy === kind}>

@@ -46,12 +46,20 @@ export const db = {
   wagons: () => all('wagons'),
   saveWagon: (w) => put('wagons', w),
 
-  /** sample: { id, kind: 'cislo' | 'napis' | klíč z SWITCHES, label, blob, wagon, created_at, predicted?, exported_at? } */
+  /**
+   * sample: { id, kind, label, blob, wagon, created_at, predicted?, exported_at?, deleted_at? }
+   * Smazání = přesun do koše (deleted_at); trvale se fotka smaže až vysypáním koše.
+   */
   addSample: (s) => put('samples', s),
   sample: (id) => get('samples', id),
   samples: () => all('samples'),
   updateSample: (s) => put('samples', s),
-  deleteSample: (id) => del('samples', id),
+  trashSample: async (s) => put('samples', { ...s, deleted_at: new Date().toISOString() }),
+  restoreSample: async (s) => {
+    const { deleted_at, ...rest } = s;
+    return put('samples', rest);
+  },
+  purgeSample: (id) => del('samples', id),
 };
 
 /** Požádá prohlížeč, aby data nemazal při nedostatku místa (hlavně kvůli fotkám pro trénink). */

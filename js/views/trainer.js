@@ -1,5 +1,5 @@
-// Trénink: vozmistr obchází vůz s kamerou a aplikace ho vede po údajích v pevném pořadí
-// (číslo vozu → hmotnost → síla zajišťovací brzdy → zajišťovací síla → délka → G/P → prázdný/ložený → revize).
+// Trénink: vozmistr obchází vůz s kamerou a aplikace ho vede po údajích v pořadí obchůzky
+// (seznam kroků vpravo; ťuknutí = přejít na krok, přetažení = změnit pořadí, pamatuje se v telefonu).
 // Kamera čte text v celém záběru, kolem přečtených nápisů kreslí rámečky a navrhne hodnotu.
 // Vozmistr ji potvrdí, opraví, nebo ťukne na správný nápis. Každé potvrzení uloží snímek, přečtený text
 // a označený nápis jako trénovací příklad; po posledním kroku se údaje uloží k vozu.
@@ -8,7 +8,7 @@ import { html, useEffect, useRef, useState } from '../../vendor/preact-htm.js';
 import { loadOcr, readText } from '../ocr.js';
 import { predictSwitch } from '../brake.js';
 import {
-  FIELDS, extractField, valueFromLine, normalizeValue, isValidValue, displayValue, matchingLines,
+  FIELDS, FIELD, extractField, valueFromLine, normalizeValue, isValidValue, displayValue, matchingLines,
 } from '../fields.js';
 import { db } from '../db.js';
 import { uid, formatNumber, isValidCheckDigit } from '../model.js';
@@ -47,13 +47,79 @@ const ocrRecord = (f) => ({
   lines: f.lines.map((l) => ({ text: l.text, conf: Math.round(l.conf * 1000) / 1000, x: round(l.x), y: round(l.y), w: round(l.w), h: round(l.h) })),
 });
 
+const ORDER_KEY = 'vykaz:trenink-poradi';
+
+// Uložené pořadí kroků; nové kroky z pozdějších verzí se přidají na konec, zrušené vypadnou.
+function loadOrder() {
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(ORDER_KEY) ?? '[]'); } catch {}
+  const known = Array.isArray(saved) ? saved.filter((k) => FIELD[k]) : [];
+  return [...known, ...FIELDS.map((f) => f.key).filter((k) => !known.includes(k))];
+}
+
+function saveOrder(order) {
+  try { localStorage.setItem(ORDER_KEY, JSON.stringify(order)); } catch {}
+}
+
+/**
+ * Kroky vpravo pod sebou. Ťuknutí = přejít na krok, tah nahoru/dolů = přesunout krok jinam.
+ * Všechny položky mají stejnou výšku, cílové místo se tak spočítá z polohy prstu.
+ */
+function StepList({ order, current, values, onPick, onReorder }) {
+  const listRef = useRef();
+  const drag = useRef(null);
+  const [preview, setPreview] = useState(null);
+  const items = preview ?? order;
+
+  function down(e, key) {
+    drag.current = { key, startY: e.clientY, moved: false };
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  }
+  function move(e) {
+    const d = drag.current;
+    if (!d || (!d.moved && Math.abs(e.clientY - d.startY) < 10)) return;
+    d.moved = true;
+    const els = listRef.current.children;
+    const top = els[0].getBoundingClientRect().top;
+    const pitch = els.length > 1 ? els[1].getBoundingClientRect().top - top : els[0].offsetHeight;
+    const to = Math.max(0, Math.min(order.length - 1, Math.floor((e.clientY - top) / pitch)));
+    const rest = order.filter((k) => k !== d.key);
+    setPreview([...rest.slice(0, to), d.key, ...rest.slice(to)]);
+  }
+  function up() {
+    const d = drag.current;
+    drag.current = null;
+    if (d?.moved && preview) onReorder(preview);
+    else if (d) onPick(d.key);
+    setPreview(null);
+  }
+  function cancel() {
+    drag.current = null;
+    setPreview(null);
+  }
+
+  return html`<div class="steplist" ref=${listRef}>
+    ${items.map((key) => {
+      const v = values[key];
+      const state = key === current ? 'on' : v === null ? 'skip' : v !== undefined ? 'ok' : '';
+      return html`<button type="button" key=${key}
+        class=${`stepitem ${state} ${preview && drag.current?.key === key ? 'dragging' : ''}`}
+        onPointerDown=${(e) => down(e, key)} onPointerMove=${move} onPointerUp=${up} onPointerCancel=${cancel}>
+        <span class="steplabel">${v !== undefined && v !== null && key !== current ? '✓ ' : ''}${FIELD[key].short}</span>
+        <span class="grip" aria-hidden="true">⋮⋮</span>
+      </button>`;
+    })}
+  </div>`;
+}
+
 export function Trainer({ onClose }) {
   const videoRef = useRef();
   const stillRef = useRef();
   const viewRef = useRef();
   const [camera, setCamera] = useState('start');   // start | live | none
   const [ready, setReady] = useState(false);
-  const [step, setStep] = useState(0);
+  const [order, setOrder] = useState(loadOrder);
+  const [current, setCurrent] = useState(() => loadOrder()[0]);   // klíč kroku; null = vůz hotový
   const [values, setValues] = useState({});
   const [known, setKnown] = useState(null);          // údaje vozu z paměti
   const [frame, setFrame] = useState(null);          // { canvas, lines, w, h }
@@ -68,10 +134,10 @@ export function Trainer({ onClose }) {
   const [busy, setBusy] = useState(false);
   const [, setTick] = useState(0);
   const live = useRef({});
-  live.current = { step, frozen, touched };
+  live.current = { key: current, frozen, touched };
 
-  const field = FIELDS[step];
-  const done = step >= FIELDS.length;
+  const field = current ? FIELD[current] : null;
+  const done = !field;
 
   // kamera a průběžné čtení
   useEffect(() => {
@@ -94,13 +160,13 @@ export function Trainer({ onClose }) {
       setCamera('live');
       await loadOcr().catch(() => {});
       while (!stopped) {
-        const { step: s, frozen: fz } = live.current;
-        if (fz || s >= FIELDS.length || video.readyState < 2) { await sleep(150); continue; }
+        const { key: k, frozen: fz } = live.current;
+        if (fz || !k || video.readyState < 2) { await sleep(150); continue; }
         const c = grabFrame(video, video.videoWidth, video.videoHeight);
         const lines = await readText(c).catch(() => []);
-        if (stopped || live.current.frozen || live.current.step !== s) continue;
+        if (stopped || live.current.frozen || live.current.key !== k) continue;
         setFrame({ canvas: c, lines, w: c.width, h: c.height });
-        await suggest(FIELDS[s], c, lines);
+        await suggest(FIELD[k], c, lines);
         await sleep(60);
       }
     })();
@@ -144,18 +210,30 @@ export function Trainer({ onClose }) {
     }
   }
 
-  function resetStep(next, vals = values) {
-    setStep(next);
+  // Přechod na krok (klíč; null = souhrn vozu). Na už potvrzeném kroku zůstane potvrzená hodnota.
+  function goTo(key, vals = values) {
+    setCurrent(key);
     setFrozen(false);
     setCand(null);
     setTapped(null);
     setPred(null);
-    // při návratu na už potvrzený krok zůstane potvrzená hodnota
-    const f = FIELDS[next];
+    const f = key ? FIELD[key] : null;
     const prev = f ? vals[f.key] : null;
     setInput(f && prev ? editable(f, prev) : '');
     setTouched(Boolean(prev));
     if (f?.type === 'switch') setChoice(prev ?? f.default ?? null);
+  }
+
+  // další nevyplněný krok v pořadí za tím současným (pak od začátku); vše vyplněné → souhrn
+  function nextKey(vals) {
+    const i = order.indexOf(current);
+    const rest = [...order.slice(i + 1), ...order.slice(0, i)];
+    return rest.find((k) => vals[k] === undefined) ?? null;
+  }
+
+  function reorder(next) {
+    setOrder(next);
+    saveOrder(next);
   }
 
   function freeze() {
@@ -219,7 +297,7 @@ export function Trainer({ onClose }) {
     vibrate(50);
     const next = { ...values, [field.key]: value };
     setValues(next);
-    resetStep(step + 1, next);
+    goTo(nextKey(next), next);
   }
 
   // Který nápis je potvrzený údaj: ten, na který vozmistr ťukl, jinak řádky se stejnou hodnotou;
@@ -236,7 +314,7 @@ export function Trainer({ onClose }) {
   function skip() {
     const next = { ...values, [field.key]: null };
     setValues(next);
-    resetStep(step + 1, next);
+    goTo(nextKey(next), next);
   }
 
   async function saveWagon() {
@@ -251,7 +329,7 @@ export function Trainer({ onClose }) {
   function newWagon() {
     setValues({});
     setKnown(null);
-    resetStep(0, {});
+    goTo(order[0], {});
   }
 
   // rámečky kolem přečtených řádků
@@ -277,28 +355,25 @@ export function Trainer({ onClose }) {
       <div class="boxes">${boxes}</div>
       <div class="top">
         <button class="iconbtn" onClick=${onClose} aria-label="Zavřít"><${Icon} name="close" /></button>
-        <div class="steps">
-          ${FIELDS.map((f, i) => html`<button type="button" class=${`stepchip ${i === step ? 'on' : values[f.key] !== undefined ? 'ok' : ''}`}
-            onClick=${() => resetStep(i)}>${i + 1}</button>`)}
-        </div>
+        ${frozen && !done && camera === 'live' && html`<button class="btn small" onClick=${() => { setFrozen(false); setTapped(null); }}>
+          <${Icon} name="camera" size=${18} /> Zpět ke kameře</button>`}
       </div>
+      <${StepList} order=${order} current=${current} values=${values} onPick=${(k) => goTo(k)} onReorder=${reorder} />
       ${!done && html`<div class="ask">
-        <div class="ask-n">${step + 1} / ${FIELDS.length} · uloženo snímků: ${saved}</div>
+        <div class="ask-n">${order.indexOf(current) + 1} / ${order.length} · uloženo snímků: ${saved}</div>
         <div class="ask-title">${field.title}</div>
         <div class="ask-hint">${!ready ? 'Načítám rozpoznávání…' : field.hint}</div>
       </div>`}
-      ${frozen && !done && camera === 'live' && html`<button class="btn small resume" onClick=${() => { setFrozen(false); setTapped(null); }}>
-        <${Icon} name="camera" size=${18} /> Zpět ke kameře</button>`}
     </div>
 
     <div class="panel">
       ${done
         ? html`<h2 style="margin-bottom:.5rem">Vůz hotový</h2>
             <ul class="summary">
-              ${FIELDS.map((f) => html`<li><span>${f.title}</span><b>${values[f.key] ? displayValue(f, values[f.key]) : '—'}</b></li>`)}
+              ${order.map((k) => FIELD[k]).map((f) => html`<li><span>${f.title}</span><b>${values[f.key] ? displayValue(f, values[f.key]) : '—'}</b></li>`)}
             </ul>
             <div class="row" style="margin-top:.6rem">
-              <button class="btn" style="flex:1" onClick=${() => resetStep(FIELDS.length - 1)}>Zpět</button>
+              <button class="btn" style="flex:1" onClick=${() => goTo(order.at(-1))}>Zpět</button>
               <button class="btn ok big" style="flex:2" onClick=${saveWagon}><${Icon} name="check" /> Uložit a další vůz</button>
             </div>`
         : html`

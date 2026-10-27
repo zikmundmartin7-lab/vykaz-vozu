@@ -9,13 +9,13 @@ Aplikace pro vozmistry: kamerou telefonu přečte číslo železničního vozu, 
 - **Údaje z nápisů vozu:** počet náprav, délka přes nárazníky, hmotnost prázdného vozu, zajišťovací síla ruční brzdy, nejvyšší dovolená rychlost, druh brzdových špalíků (K, L, LL, D, F) a brzdicí váhy (P/G × prázdný/ložený). **Přečíst nápis** vyfotí popis vozu a nabídne přečtená čísla – ťuknout do pole a pak na hodnotu (t a kg se převádějí samy). Údaje se zapamatují podle čísla vozu a příště se vyplní samy.
 - **Náklad a zásilka:** hmotnost nákladu, stanice určení (předvyplní se od předchozího vozu nebo cílová stanice vlaku), RID – **Tabulka RID** přečte z fotky oranžové tabulky IČN (nahoře) a UN číslo (dole), mimořádná zásilka. Traťová třída se spočítá z hmotnosti na nápravu (A do 16 t, B do 18 t, C do 20 t, D do 22,5 t), jde ji i zvolit ručně.
 - **Výkaz vozidel pro nákladní vlak** podle formuláře (kolonky 2–4b, 45–59, CELKEM, 60–66): stránky po 20 vozech se „Sestava pokračuje na další straně“ a „Strana x / y“, číslo vozu rozdělené na režim / zem. reg. / číslo / k. č., u vypnuté brzdy a vozu bez RID se pole proškrtne, zajišťovací síla jen u vozů s ověřenou ruční brzdou. Součty (CELKEM) na poslední straně za celý vlak. Export do **PDF** (tisk na šířku A4), **Excelu** se stejnými kolonkami a **sdílení** textu. Navíc pro kontrolu brzdicí procenta podle polohy přestavovačů G/P.
-- **Data pro trénink:** přehled nasbíraných snímků podle údaje a polohy, export do ZIPu (u snímků z tréninku i JSON s přečteným textem a označeným nápisem), smazání vyexportovaných nebo všech fotek.
+- **Data pro trénink:** přehled nasbíraných snímků podle údaje a polohy, export do ZIPu (u snímků z tréninku i JSON s přečteným textem a označeným nápisem), smazání vyexportovaných nebo všech fotek do **koše** (odtud jde obnovit, nebo koš vysypat a fotky trvale smazat).
 
 Vše se ukládá jen v telefonu (v prohlížeči). Ven se data dostanou exportem.
 
 ## Snímání pro trénink
 
-Úvodní obrazovka → **Snímat pro trénink**. Vozmistr obchází vůz s kamerou a aplikace ho vede po údajích v tomto pořadí:
+Úvodní obrazovka → **Snímat pro trénink**. Vozmistr obchází vůz s kamerou a aplikace ho vede po údajích. Výchozí pořadí:
 
 1. číslo vozu, 2. počet náprav, 3. hmotnost vozu, 4. síla zajišťovací brzdy (t), 5. zajišťovací síla (kN), 6. délka přes nárazníky, 7. nejvyšší dovolená rychlost, 8. druh brzdových špalíků, 9. přestavovač G/P, 10. přestavovač prázdný/ložený, 11. revize.
 
@@ -25,7 +25,9 @@ Vše se ukládá jen v telefonu (v prohlížeči). Ven se data dostanou exportem
 - Počet náprav, druh špalíků a přestavovače se volí tlačítkem (nápravy předvolené na 4, u špalíků aplikace nabídne LL/K/L, když je na snímku samostatný nápis).
 - Na konci se ukáže souhrn a **Uložit a další vůz** uloží údaje k číslu vozu (příště se ve výkazu vyplní samy).
 
-Každé potvrzení uloží snímek, potvrzenou hodnotu, všechen přečtený text s rámečky a označený nápis. Z toho se natrénuje síť, která pozná, který nápis je který údaj, a sítě na přestavovače. Čísla v kroužcích nahoře přeskakují mezi kroky, vpravo je počet uložených snímků.
+- Kroky jsou vpravo pod sebou s popisem: bílý = právě snímaný, zelený s ✓ = potvrzený, přeškrtnutý = na voze není. **Ťuknutím** se na krok přejde, **tažením nahoru/dolů** se přesune jinam v pořadí (pořadí si telefon pamatuje). Po potvrzení aplikace přejde na další nevyplněný krok.
+
+Každé potvrzení uloží snímek, potvrzenou hodnotu, všechen přečtený text s rámečky a označený nápis. Z toho se natrénuje síť, která pozná, který nápis je který údaj, a sítě na přestavovače.
 
 Údaje se zatím hledají pravidly: hmotnost = číslo s kg mezi 8 a 60 t, síla zajišťovací brzdy = samostatné číslo s t, zajišťovací síla = číslo s kN, délka = číslo s m mezi 5 a 40, rychlost = číslo s km/h (bez jednotky SS v tabulce zatížení = 120, S = 100), revize = řádek s nápisem REV. Čtecí síť nezná českou diakritiku (ŽOS přečte jako OS) – text revize je potřeba opravit.
 

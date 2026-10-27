@@ -1,4 +1,4 @@
-// Fotky pro trénink sítí: přehled, export do ZIPu (pro Google Disk a sešit v Colabu), úklid.
+// Fotky pro trénink sítí: přehled, export do ZIPu (pro Google Disk a sešit v Colabu), úklid přes koš.
 
 import { html, useEffect, useState } from '../../vendor/preact-htm.js';
 import { SWITCHES, plural } from '../model.js';
@@ -47,15 +47,17 @@ async function buildZip(samples) {
 }
 
 export function DataView() {
-  const [samples, setSamples] = useState(null);
   const [models, setModels] = useState({});
   const [busy, setBusy] = useState(false);
 
-  const load = () => db.samples().then((list) => setSamples(list.sort((a, b) => a.created_at.localeCompare(b.created_at))));
+  const [all, setAll] = useState(null);
+  const load = () => db.samples().then((list) => setAll(list.sort((a, b) => a.created_at.localeCompare(b.created_at))));
   useEffect(() => { load(); brakeModels().then(setModels); }, []);
 
-  if (!samples) return html`<${Topbar} title="Data pro trénink" back="#/" /><main><p class="muted">Načítám…</p></main>`;
+  if (!all) return html`<${Topbar} title="Data pro trénink" back="#/" /><main><p class="muted">Načítám…</p></main>`;
 
+  const samples = all.filter((s) => !s.deleted_at);
+  const trash = all.filter((s) => s.deleted_at);
   const fresh = samples.filter((s) => !s.exported_at);
   const groups = {};
   for (const s of samples) {
@@ -84,18 +86,25 @@ export function DataView() {
     setBusy(false);
   }
 
-  async function removeAll() {
-    if (!samples.length) return;
-    if (!confirm(`Smazat z telefonu všech ${plural(samples.length, 'fotku', 'fotky', 'fotek')} pro trénink? Vrátit to nejde.`)) return;
-    for (const s of samples) await db.deleteSample(s.id);
-    toast('Fotky pro trénink smazány.');
+  const fotek = (n) => plural(n, 'fotku', 'fotky', 'fotek');
+
+  async function toTrash(list, question) {
+    if (!list.length || !confirm(question)) return;
+    for (const s of list) await db.trashSample(s);
+    toast(`${plural(list.length, 'fotka přesunuta', 'fotky přesunuty', 'fotek přesunuto')} do koše.`);
     await load();
   }
 
-  async function removeExported() {
-    const old = samples.filter((s) => s.exported_at);
-    if (!old.length || !confirm(`Smazat z telefonu ${plural(old.length, 'vyexportovanou fotku', 'vyexportované fotky', 'vyexportovaných fotek')}?`)) return;
-    for (const s of old) await db.deleteSample(s.id);
+  async function restoreAll() {
+    for (const s of trash) await db.restoreSample(s);
+    toast(`Obnoveno: ${plural(trash.length, 'fotka', 'fotky', 'fotek')}.`);
+    await load();
+  }
+
+  async function emptyTrash() {
+    if (!confirm(`Trvale smazat ${fotek(trash.length)} z koše? Vrátit to už nepůjde.`)) return;
+    for (const s of trash) await db.purgeSample(s.id);
+    toast('Koš vysypán.');
     await load();
   }
 
@@ -135,10 +144,23 @@ export function DataView() {
         </div>
         <p class="hint">ZIP uložte na Google Disk do složky <b>Vykaz_vozu_data</b> a spusťte sešit <b>trenink_prestavovacu.ipynb</b> v Colabu.</p>
         <div class="row" style="margin-top:.4rem">
-          <button class="linkbtn small danger" onClick=${removeExported}>Smazat vyexportované</button>
+          <button class="linkbtn small danger"
+            onClick=${() => toTrash(samples.filter((s) => s.exported_at), `Přesunout ${fotek(samples.filter((s) => s.exported_at).length)} (už vyexportované) do koše?`)}>
+            Smazat vyexportované</button>
           <span class="spacer"></span>
-          <button class="btn small danger" disabled=${!samples.length} onClick=${removeAll}><${Icon} name="trash" size=${18} /> Smazat všechny fotky</button>
+          <button class="btn small danger" disabled=${!samples.length}
+            onClick=${() => toTrash(samples, `Přesunout všechny fotky do koše (${plural(samples.length, 'fotka', 'fotky', 'fotek')})? Z koše je jde obnovit.`)}>
+            <${Icon} name="trash" size=${18} /> Smazat všechny fotky</button>
         </div>
       </div>
+
+      ${trash.length > 0 && html`<div class="card">
+        <h2><${Icon} name="trash" size=${18} /> Koš</h2>
+        <p style="margin-top:0">V koši je ${fotek(trash.length)}. Do exportu ani do tréninku nejdou.</p>
+        <div class="row">
+          <button class="btn" onClick=${restoreAll}>Obnovit vše</button>
+          <button class="btn danger" onClick=${emptyTrash}>Vysypat koš</button>
+        </div>
+      </div>`}
     </main>`;
 }
