@@ -2,32 +2,40 @@
 
 import { html, useEffect, useState } from '../../vendor/preact-htm.js';
 import { SWITCHES, optionLabel, plural } from '../model.js';
+import { FIELDS } from '../fields.js';
 import { db } from '../db.js';
 import { brakeModels } from '../brake.js';
 import { zip, download } from '../xlsx.js';
 import { Topbar, Icon, toast } from '../ui.js';
 
 const KINDS = {
+  ...Object.fromEntries(FIELDS.map((f) => [f.key, f.title])),
   ...Object.fromEntries(Object.entries(SWITCHES).map(([k, s]) => [k, s.title])),
-  cislo: 'Čísla vozů',
-  napis: 'Nápisy na voze',
+  napis: 'Nápisy na voze (karta vozu)',
   rid: 'Tabulky RID',
 };
 
 const enc = new TextEncoder();
 const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
-// Struktura ZIPu: <druh>/<poloha>/<id>.jpg (přímo pro torchvision ImageFolder) + labels.csv se vším.
+// Struktura ZIPu: <druh>/<poloha>/<id>.jpg u přestavovačů (přímo pro torchvision ImageFolder),
+// <druh>/<id>.jpg u ostatních; u snímků z tréninku navíc <id>.json s přečteným textem, rámečky řádků
+// a označeným nápisem (match = indexy řádků). labels.csv shrnuje vše.
 async function buildZip(samples) {
   const files = [];
-  const csv = [['soubor', 'druh', 'poloha', 'vuz', 'porizeno', 'sit_odhad', 'sit_jistota'].join(';')];
+  const csv = [['soubor', 'druh', 'hodnota', 'vuz', 'porizeno', 'zdroj', 'odhad', 'jistota'].join(';')];
   for (const s of samples) {
     const dir = SWITCHES[s.kind] ? `${s.kind}/${s.label}` : s.kind;
     const name = `${dir}/${s.id}.jpg`;
     files.push({ name, data: new Uint8Array(await s.blob.arrayBuffer()) });
-    csv.push([name, s.kind, s.label, s.wagon, s.created_at, s.predicted?.label, s.predicted?.prob?.toFixed(3)].map(csvCell).join(';'));
+    if (s.ocr) {
+      const meta = { kind: s.kind, label: s.label, wagon: s.wagon, predicted: s.predicted, match: s.match, ocr: s.ocr };
+      files.push({ name: `${dir}/${s.id}.json`, data: enc.encode(JSON.stringify(meta)) });
+    }
+    csv.push([name, s.kind, s.label, s.wagon, s.created_at, s.source ?? 'karta', s.predicted?.label, s.predicted?.prob?.toFixed(3)]
+      .map(csvCell).join(';'));
   }
-  files.push({ name: 'labels.csv', data: enc.encode(`﻿${csv.join('\n')}\n`) });
+  files.push({ name: 'labels.csv', data: enc.encode(`\ufeff${csv.join('\n')}\n`) });
   return zip(files, 'application/zip');
 }
 
@@ -79,8 +87,9 @@ export function DataView() {
   return html`
     <${Topbar} title="Data pro trénink" back="#/" />
     <main>
+      <a class="btn primary block" href="#/trenink" style="margin-bottom:12px"><${Icon} name="camera" /> Snímat pro trénink</a>
       <div class="notice info">
-        Každá fotka přestavovače se uloží s polohou, kterou vozmistr potvrdil. Z nich se v Colabu natrénuje síť,
+        Každý snímek se uloží s hodnotou, kterou vozmistr potvrdil. Z nich se v Colabu natrénuje síť,
         která pak polohu pozná z fotky sama – i bez signálu. Na začátek stačí desítky fotek od každé polohy, spolehlivě to chce stovky.
       </div>
 

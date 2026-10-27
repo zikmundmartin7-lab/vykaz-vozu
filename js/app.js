@@ -4,6 +4,7 @@
 //   #/vykaz/<id>/skenovat    skener čísla nového vozu
 //   #/vykaz/<id>/vuz/<eid>   karta vozu
 //   #/vykaz/<id>/vystup      hotový výkaz (Excel, PDF, sdílení)
+//   #/trenink                vedené snímání údajů vozu pro trénink sítě
 //   #/data                   fotky pro trénink sítí
 
 import { html, render, useEffect, useState } from '../vendor/preact-htm.js';
@@ -17,6 +18,7 @@ import { EntryView } from './views/entry.js';
 import { OutputView } from './views/output.js';
 import { DataView } from './views/data.js';
 import { Scanner } from './views/scanner.js';
+import { Trainer } from './views/trainer.js';
 
 const parse = () => location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
 
@@ -47,6 +49,7 @@ function App() {
   };
 
   if (path[0] === 'data') return html`<${DataView} />`;
+  if (path[0] === 'trenink') return html`<${Trainer} onClose=${() => go('#/data', true)} />`;
   if (!reportId) return html`<${HomeView} ocr=${ocr} />`;
   if (report === false) { go('#/', true); return null; }
   if (!report || report.id !== reportId) return null;

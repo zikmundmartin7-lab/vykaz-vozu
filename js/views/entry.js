@@ -12,7 +12,7 @@ import { readText } from '../ocr.js';
 import { brakeModels, predictSwitch } from '../brake.js';
 import { Topbar, Icon, Seg, NumField, NumberInput, PhotoButton, BlobImg, toast, go } from '../ui.js';
 
-const FIELD_NO = { axles: '47', length_m: '48', tare_kg: '50', hand_force_kn: '53', max_speed: '57' };
+const FIELD_NO = { axles: '47.', length_m: '48.', tare_kg: '50.', hand_bw_t: '', hand_force_kn: '53.', max_speed: '57.' };
 
 // Popisek fotky pro trénink podle konečného stavu vozu.
 function labelFor(kind, e) {
@@ -219,9 +219,11 @@ export function EntryView({ report, entryId, save }) {
               ${lines.map((l) => html`<div>${l.text}</div>`)}</details>`}
         </div>`}
         <div class="grid2">
-          ${WAGON_FIELDS.map(([key, label, unit]) => html`<${NumField} label=${`${FIELD_NO[key]}. ${label}`} unit=${unit} value=${e[key]}
+          ${WAGON_FIELDS.map(([key, label, unit]) => html`<${NumField} label=${`${FIELD_NO[key]} ${label}`.trim()} unit=${unit} value=${e[key]}
             onFocus=${() => setFocus({ key, unit })} onChange=${(v) => update({ [key]: v })} />`)}
         </div>
+        <label class="field"><span>Revize (nápis REV)</span>
+          <input class="input" value=${e.revision ?? ''} onInput=${(ev) => update({ revision: ev.target.value })} /></label>
         <div class="field-title">51. Druh brzdových špalíků</div>
         <${Seg} value=${e.blocks} options=${BLOCKS.map(([v, l]) => [v, l])} onChange=${(v) => update({ blocks: e.blocks === v ? null : v })} />
         <div class="hint">${BLOCKS.find(([v]) => v === e.blocks)?.[2] ?? 'K, L, LL nekovové špalíky · D kotoučová brzda · F litinové špalíky'}</div>

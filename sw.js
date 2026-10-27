@@ -3,14 +3,14 @@
 // Velké soubory (neuronové sítě, ONNX runtime): jednou stáhnout a držet ve vlastní zásobě MODELS,
 // aby se při každém vydání aplikace nestahovalo znovu 25 MB. Při změně modelu zvýšit MODELS.
 
-const CACHE = 'vykaz-v1';
+const CACHE = 'vykaz-v2';
 const MODELS = 'vykaz-modely-v1';
 
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css',
-  'js/app.js', 'js/model.js', 'js/db.js', 'js/ui.js', 'js/ocr.js', 'js/ort.js', 'js/brake.js', 'js/xlsx.js',
+  'js/app.js', 'js/model.js', 'js/db.js', 'js/ui.js', 'js/ocr.js', 'js/ort.js', 'js/brake.js', 'js/xlsx.js', 'js/fields.js',
   'js/views/home.js', 'js/views/report.js', 'js/views/entry.js', 'js/views/scanner.js',
-  'js/views/output.js', 'js/views/data.js',
+  'js/views/output.js', 'js/views/data.js', 'js/views/trainer.js',
   'vendor/preact-htm.js', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 const BIG = ['vendor/ort/ort.wasm.min.mjs', 'vendor/ort/ort-wasm-simd-threaded.mjs',

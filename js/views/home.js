@@ -68,9 +68,15 @@ export function HomeView({ ocr }) {
           </a></li>`;
         })}
       </ul>
-      <p style="text-align:center;margin-top:1.5rem">
-        <a href="#/data"><${Icon} name="brain" size=${18} /> Data pro trénink sítě</a>
-      </p>
+      <div class="card" style="margin-top:1.2rem">
+        <h2>Trénink sítě</h2>
+        <p class="small">Obejděte vůz s kamerou: aplikace vás povede po údajích (číslo, hmotnost, zajišťovací brzda,
+          délka, přestavovače, revize), vy je potvrdíte nebo opravíte. Z potvrzených snímků se síť učí.</p>
+        <div class="row">
+          <a class="btn primary" href="#/trenink"><${Icon} name="camera" /> Snímat pro trénink</a>
+          <a class="btn" href="#/data"><${Icon} name="brain" /> Nasbíraná data</a>
+        </div>
+      </div>
     </main>
     <div class="bottombar">
       <button class="btn primary big" onClick=${createReport}><${Icon} name="plus" /> Nový výkaz</button>

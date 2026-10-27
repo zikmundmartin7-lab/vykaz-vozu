@@ -38,12 +38,12 @@ const LOOKALIKE = { O: '0', o: '0', Q: '0', D: '0', I: '1', l: '1', i: '1', '|':
 // slova z písmen (RIV, TEN, D-DB, PL-FPL …) se přeskočí – na novějších vozech bývají mezi částmi čísla.
 function digitTokens(lines) {
   const tokens = [];
-  for (const l of lines) {
+  for (const [li, l] of lines.entries()) {
     for (const word of l.text.split(/[^0-9A-Za-z|!]+/)) {
       const digits = word.replace(/\D/g, '').length;
       if (!digits || digits / word.length < 0.6) continue;
       const d = [...word].map((c) => (/\d/.test(c) ? c : LOOKALIKE[c] ?? '')).join('');
-      tokens.push({ d, row: l.row ?? 0, h: l.h ?? 1, conf: l.conf ?? 0 });
+      tokens.push({ d, li, row: l.row ?? 0, h: l.h ?? 1, conf: l.conf ?? 0 });
     }
   }
   return tokens;
@@ -54,7 +54,8 @@ const GROUP_ENDS = new Set([2, 4, 8, 11, 12]);
 
 /**
  * Najde v přečtených řádcích (výstup readText) možná čísla vozů – i rozdělená do více řádků.
- * Vrací [{ number, valid, sure, score }] od nejpravděpodobnějšího; valid = sedí kontrolní číslice.
+ * Vrací [{ number, valid, sure, score, lines }] od nejpravděpodobnějšího; valid = sedí kontrolní číslice,
+ * lines = indexy řádků, ze kterých se číslo složilo.
  */
 export function numberCandidates(lines) {
   const tokens = digitTokens(lines);
@@ -70,7 +71,7 @@ export function numberCandidates(lines) {
     // „jisté“ číslo: sedí kontrolní číslice, kód státu i rozdělení do skupin (náhodná shoda je velmi vzácná)
     const sure = valid && country && grouped;
     const prev = found.get(number);
-    if (!prev || prev.score < score) found.set(number, { number, valid, sure, score });
+    if (!prev || prev.score < score) found.set(number, { number, valid, sure, score, lines: [...new Set(parts.map((t) => t.li))] });
   };
   for (let i = 0; i < tokens.length; i++) {
     let all = '';
@@ -138,10 +139,11 @@ export const WAGON_FIELDS = [
   ['axles', 'Počet náprav', ''],
   ['length_m', 'Délka přes nárazníky', 'm'],
   ['tare_kg', 'Hmotnost prázdného vozu', 'kg'],
+  ['hand_bw_t', 'Síla zajišťovací brzdy', 't'],
   ['hand_force_kn', 'Zajišťovací síla', 'kN'],
   ['max_speed', 'Nejv. dovolená rychlost', 'km/h'],
 ];
-const STATIC_KEYS = [...WAGON_FIELDS.map(([k]) => k), 'blocks'];
+const STATIC_KEYS = [...WAGON_FIELDS.map(([k]) => k), 'blocks', 'revision'];
 
 /**
  * Nový vůz ve výkazu: údaje z nápisů z paměti (wagon), polohy přestavovačů a stanice určení
@@ -154,7 +156,7 @@ export function newEntry(number, wagon, prev, toStation = '') {
     rezim: prev?.rezim ?? 'P',
     naklad: prev?.naklad ?? 'prazdny',
     kohout: 'zapnuta',
-    rucni: wagon?.hand_force_kn === 0 ? 'nema' : 'odbrzdena',
+    rucni: 'odbrzdena',
     hand_checked: false,
     ...Object.fromEntries(STATIC_KEYS.map((k) => [k, wagon?.[k] ?? null])),
     bw: { ...(wagon?.bw ?? {}) },
