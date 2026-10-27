@@ -1,0 +1,6 @@
+.DS_Store
+.claude/
+CLAUDE.md
+test/img/
+__pycache__/
+*.pdf

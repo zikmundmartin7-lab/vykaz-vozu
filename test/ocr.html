@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="cs"><head><meta charset="utf-8"><title>Test OCR</title></head>
+<body><pre id="out">…</pre>
+<script type="module">
+import { readText, loadOcr } from '../js/ocr.js';
+import { numberCandidates, formatNumber } from '../js/model.js';
+const out = document.getElementById('out');
+const log = (s) => { out.textContent += s + '\n'; };
+window.results = [];
+const t0 = performance.now();
+const m = await loadOcr();
+log(`modely načtené za ${Math.round(performance.now() - t0)} ms; rec vstup ${m.rec.inputNames}, výstup ${m.rec.outputNames}, znaků ${m.chars.length}`);
+for (let i = 0; i < 6; i++) {
+  const img = new Image(); img.src = `img/img${i}.jpg`; await img.decode();
+  const t = performance.now();
+  const lines = await readText(img);
+  const c = numberCandidates(lines).slice(0, 3);
+  const r = { i, ms: Math.round(performance.now() - t), lines: lines.map(l => l.text), cand: c.map(x => `${formatNumber(x.number)}${x.valid ? ' ✓' : ''}`) };
+  window.results.push(r);
+  log(JSON.stringify(r));
+}
+log('HOTOVO');
+</script></body></html>

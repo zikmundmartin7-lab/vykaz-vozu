@@ -1,0 +1,17 @@
+{
+  "name": "Výkaz vozů",
+  "short_name": "Výkaz vozů",
+  "description": "Snímání čísel vozů a přestavovačů brzdy, výkaz vozidel",
+  "lang": "cs",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f2f4f7",
+  "theme_color": "#1f4e8c",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

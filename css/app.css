@@ -1,0 +1,245 @@
+/* Výkaz vozů – vzhled. Mobil na prvním místě (ovládání palcem, i v rukavicích), barvy jako Závady vozů. */
+
+:root {
+  color-scheme: light;
+  --bg: #f2f4f7;
+  --surface: #ffffff;
+  --text: #1d2939;
+  --muted: #667085;
+  --border: #e4e7ec;
+  --primary: #1f4e8c;
+  --primary-dark: #173b6a;
+  --primary-soft: #e8eff8;
+  --ok: #2f9e44;       --ok-bg: #e3f6e7;      --ok-ink: #1d6b2c;
+  --warn: #f0700a;     --warn-bg: #ffecdc;    --warn-ink: #8a3c00;
+  --red: #e03131;      --red-bg: #ffe5e5;     --red-ink: #a01616;
+  --radius: 14px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .1);
+  --page-w: 760px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--text);
+  -webkit-text-size-adjust: 100%;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--bg); }
+body { min-height: 100dvh; overflow-x: hidden; }
+a { color: var(--primary); text-decoration: none; }
+h1, h2, h3 { margin: 0; line-height: 1.25; }
+h2 { font-size: 1.05rem; }
+p { margin: .4rem 0 .8rem; }
+button, input, select, textarea { font: inherit; color: inherit; }
+.icon { flex: none; vertical-align: middle; }
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+.spacer { flex: 1; }
+.hint { color: var(--muted); font-size: .85rem; margin-top: .35rem; }
+.row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+.err { color: var(--red-ink); }
+.okc { color: var(--ok-ink); }
+
+/* ───── Rozvržení ───── */
+
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: .5rem;
+  min-height: 56px;
+  padding: max(.4rem, env(safe-area-inset-top)) max(16px, calc((100% - var(--page-w)) / 2)) .4rem;
+  background: var(--primary); color: #fff;
+}
+.topbar h1 { font-size: 1.1rem; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar .iconbtn { color: #fff; }
+main {
+  max-width: var(--page-w); margin: 0 auto;
+  padding: 16px 16px calc(96px + env(safe-area-inset-bottom));
+}
+.bottombar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+  display: flex; gap: .5rem;
+  padding: .6rem max(16px, calc((100% - var(--page-w)) / 2)) max(.6rem, env(safe-area-inset-bottom));
+  background: rgba(242, 244, 247, .94); backdrop-filter: blur(6px);
+  border-top: 1px solid var(--border);
+}
+.bottombar .btn { flex: 1; }
+
+.card {
+  background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 14px 16px; margin-bottom: 12px;
+}
+.card h2 { margin-bottom: .6rem; }
+.section-title { margin: 18px 4px 8px; font-size: .8rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+
+/* ───── Tlačítka a pole ───── */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .45rem;
+  min-height: 48px; padding: .55rem 1rem; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  font-weight: 600; cursor: pointer; text-align: center;
+}
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary:active { background: var(--primary-dark); }
+.btn.ok { background: var(--ok); border-color: var(--ok); color: #fff; }
+.btn.danger { color: var(--red-ink); }
+.btn.big { min-height: 58px; font-size: 1.05rem; }
+.btn.small { min-height: 38px; padding: .3rem .7rem; font-size: .9rem; }
+.btn.block { width: 100%; }
+.iconbtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; border: 0; border-radius: 50%; background: transparent; cursor: pointer; color: inherit;
+}
+.iconbtn:active { background: rgba(0, 0, 0, .08); }
+.linkbtn { border: 0; background: none; color: var(--primary); padding: .3rem 0; cursor: pointer; font-weight: 600; }
+
+label.field { display: block; margin-bottom: .75rem; }
+label.field > span { display: block; font-size: .85rem; color: var(--muted); margin-bottom: .2rem; }
+input.input, textarea.input, select.input {
+  width: 100%; min-height: 46px; padding: .55rem .75rem;
+  border: 1px solid #d0d5dd; border-radius: 10px; background: #fff;
+}
+input.input:focus, textarea.input:focus { outline: 2px solid var(--primary); outline-offset: 0; border-color: var(--primary); }
+.input-unit { position: relative; }
+.input-unit input { padding-right: 2.2rem; }
+.input-unit em { position: absolute; right: .75rem; top: 50%; transform: translateY(-50%); font-style: normal; color: var(--muted); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 .75rem; align-items: end; }
+.field-title { font-size: .85rem; color: var(--muted); margin: .4rem 0 .3rem; }
+label.check { display: flex; align-items: center; gap: .6rem; min-height: 44px; margin: .3rem 0; cursor: pointer; }
+label.check input { width: 22px; height: 22px; flex: none; accent-color: var(--primary); }
+
+/* přepínač s velkými tlačítky (poloha přestavovače) */
+.seg { display: flex; gap: .4rem; }
+.seg button {
+  flex: 1; min-height: 52px; border-radius: 12px; border: 2px solid var(--border); background: #fff;
+  font-weight: 700; font-size: 1.05rem; cursor: pointer;
+}
+.seg button.on { border-color: var(--primary); background: var(--primary); color: #fff; }
+.seg button.on.bad { border-color: var(--red); background: var(--red); }
+
+/* ───── Seznamy ───── */
+
+.list { list-style: none; margin: 0; padding: 0; }
+.item {
+  display: flex; align-items: center; gap: .75rem;
+  background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 12px 14px; margin-bottom: 8px; cursor: pointer; width: 100%; border: 0; text-align: left;
+}
+.item .pos {
+  flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--primary-soft); color: var(--primary); font-weight: 700; font-size: .9rem;
+}
+.item .main { flex: 1; min-width: 0; }
+.item .title { font-weight: 600; }
+.item .sub { color: var(--muted); font-size: .85rem; margin-top: .1rem; }
+.number { font-variant-numeric: tabular-nums; letter-spacing: .02em; white-space: nowrap; }
+.number b { font-size: 1.08em; }
+.chips { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .35rem; }
+.chip {
+  display: inline-flex; align-items: center; gap: .25rem;
+  padding: .1rem .5rem; border-radius: 999px; font-size: .8rem; font-weight: 600;
+  background: var(--primary-soft); color: var(--primary-dark); border: 0;
+}
+.chip.bad { background: var(--red-bg); color: var(--red-ink); }
+.chip.warn { background: var(--warn-bg); color: var(--warn-ink); }
+.chip.ok { background: var(--ok-bg); color: var(--ok-ink); }
+button.chip { cursor: pointer; font-size: .95rem; padding: .35rem .7rem; }
+
+.notice { border-radius: 12px; padding: .7rem .9rem; margin-bottom: 12px; font-size: .92rem; }
+.notice.info { background: var(--primary-soft); color: var(--primary-dark); }
+.notice.warn { background: var(--warn-bg); color: var(--warn-ink); }
+.notice.ok { background: var(--ok-bg); color: var(--ok-ink); }
+.notice.bad { background: var(--red-bg); color: var(--red-ink); }
+
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
+.stat { background: var(--bg); border-radius: 10px; padding: .45rem .6rem; }
+.stat b { display: block; font-size: 1.15rem; }
+.stat span { font-size: .75rem; color: var(--muted); }
+.stat.lambda { background: var(--primary); color: #fff; }
+.stat.lambda span { color: rgba(255, 255, 255, .8); }
+
+.thumbs { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .5rem; }
+.thumbs img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; }
+
+/* ───── Skener ───── */
+
+.scanner { position: fixed; inset: 0; z-index: 50; background: #000; color: #fff; display: flex; flex-direction: column; }
+.scanner .view { position: relative; flex: 1; overflow: hidden; }
+.scanner video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.scanner .guide {
+  position: absolute; left: 7%; right: 7%; top: 30%; height: 26%;
+  border: 3px solid rgba(255, 255, 255, .9); border-radius: 14px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45);
+}
+.scanner .guide.hit { border-color: #51cf66; }
+.scanner .top {
+  position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: .5rem;
+  padding: max(.5rem, env(safe-area-inset-top)) .75rem .5rem;
+}
+.scanner .top .iconbtn { color: #fff; background: rgba(0, 0, 0, .35); }
+.scanner .tip { position: absolute; left: 0; right: 0; top: calc(30% - 2.6rem); text-align: center; font-size: .95rem; text-shadow: 0 1px 3px #000; }
+.scanner .reading {
+  position: absolute; left: 0; right: 0; top: calc(56% + .8rem); text-align: center;
+  font-size: 1.3rem; font-weight: 700; letter-spacing: .05em; text-shadow: 0 1px 3px #000; font-variant-numeric: tabular-nums;
+}
+.scanner .panel {
+  background: #fff; color: var(--text); border-radius: 18px 18px 0 0;
+  padding: 16px 16px max(16px, env(safe-area-inset-bottom));
+}
+.scanner .found { font-size: 1.6rem; font-weight: 800; text-align: center; margin: .2rem 0 .3rem; font-variant-numeric: tabular-nums; }
+.scanner .msg { padding: 2rem 1.2rem; text-align: center; }
+
+/* ───── Výkaz vozidel (podle formuláře, stránky po 20 vozech) ───── */
+
+main.output { max-width: none; }
+.output > .card { max-width: var(--page-w); margin-left: auto; margin-right: auto; }
+.sheet-scroll { overflow-x: auto; margin-bottom: 14px; -webkit-overflow-scrolling: touch; }
+.sheet {
+  min-width: 1060px; background: #fff; color: #000; padding: 12px 14px; border-radius: 6px; box-shadow: var(--shadow);
+  font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.sheet-head { display: flex; align-items: stretch; gap: 6px; margin-bottom: 6px; }
+.sheet-title { flex: 1.6; display: flex; flex-direction: column; justify-content: center; }
+.sheet-title b { font-size: 15px; }
+.hbox { flex: 1; border: 1.5px solid #000; padding: 2px 6px; display: flex; flex-direction: column; min-height: 38px; }
+.hbox.wide { flex: 1.6; }
+.hbox small, .foot small { font-size: 9px; color: #333; display: block; }
+.hbox b { font-size: 13px; }
+table.form { border-collapse: collapse; width: 100%; table-layout: auto; }
+table.form th, table.form td { border: 1px solid #000; padding: 2px 3px; text-align: center; white-space: nowrap; }
+table.form th { font-weight: 500; font-size: 9.5px; white-space: normal; line-height: 1.15; background: #f3f4f6; vertical-align: middle; }
+table.form th.dest, table.form th.note { min-width: 110px; }
+table.form td { height: 22px; }
+table.form td.l { text-align: left; }
+table.form td.r { text-align: right; border: 0; font-weight: 600; }
+table.form td.num46 { letter-spacing: .04em; }
+table.form td.blank { border: 0; }
+table.form tr.off td { color: #b00; }
+table.form tbody tr.pad { display: none; }
+table.form tfoot td { font-weight: 700; height: 22px; }
+.sheet-foot { display: flex; align-items: flex-end; gap: 10px; margin-top: 8px; }
+table.foot { border-collapse: collapse; flex: 1; }
+table.foot td { border: 1.5px solid #000; padding: 2px 6px; height: 34px; width: 22%; vertical-align: top; font-weight: 600; }
+table.foot td:last-child { width: 34%; }
+table.foot td.blank { border: 0; }
+.sheet-meta { display: flex; flex-direction: column; gap: 10px; align-items: flex-end; white-space: nowrap; }
+
+.toast {
+  position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 60;
+  background: #1d2939; color: #fff; padding: .6rem 1rem; border-radius: 10px; font-size: .92rem; max-width: 90vw;
+}
+
+@page { size: A4 landscape; margin: 7mm; }
+@media print {
+  .topbar, .bottombar, .no-print, .toast { display: none !important; }
+  body, html { background: #fff; }
+  main, main.output { padding: 0; max-width: none; }
+  .sheet-scroll { overflow: visible; margin: 0; }
+  .sheet { min-width: 0; box-shadow: none; padding: 0; border-radius: 0; font-size: 8pt; page-break-after: always; break-after: page; }
+  .sheet-scroll:last-of-type .sheet { page-break-after: auto; break-after: auto; }
+  table.form tbody tr.pad { display: table-row; }
+  table.form th { font-size: 7pt; background: none; }
+  table.form td { height: 6.1mm; padding-top: 0; padding-bottom: 0; }
+}
