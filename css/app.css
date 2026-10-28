@@ -244,6 +244,47 @@ button.chip { cursor: pointer; font-size: .95rem; padding: .35rem .7rem; }
 .summary li { display: flex; justify-content: space-between; gap: 1rem; padding: .25rem 0; border-bottom: 1px solid var(--border); }
 .summary span { color: var(--muted); }
 
+/* probliknutí a náhled uloženého trénovacího snímku */
+.flash { position: absolute; inset: 0; z-index: 4; background: #fff; pointer-events: none; animation: flash .45s ease-out forwards; }
+@keyframes flash { from { opacity: .85; } to { opacity: 0; } }
+.saved-shot {
+  position: absolute; left: 10px; top: calc(max(.5rem, env(safe-area-inset-top)) + 54px); z-index: 5; width: 168px;
+  display: flex; flex-direction: column; gap: .3rem; padding: 6px; border-radius: 12px; background: rgba(0, 0, 0, .72);
+  color: #fff; font-size: .75rem; pointer-events: none; animation: saved 2.6s ease-in-out forwards;
+}
+.saved-shot img { width: 100%; max-height: 190px; object-fit: contain; border-radius: 8px; background: #000; }
+.saved-shot b { display: block; color: #8ce99a; font-size: .78rem; }
+@keyframes saved { 0% { opacity: 0; transform: scale(.9); } 10%, 80% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+
+/* ───── Data pro trénink: přehled, náhledy, detail snímku ───── */
+
+.train-list { list-style: none; margin: 0; padding: 0; font-size: .9rem; }
+.train-list li { display: flex; justify-content: space-between; gap: .8rem; padding: .35rem 0; border-bottom: 1px solid var(--border); }
+.train-list li b { font-weight: 600; text-align: right; }
+details.kind summary { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; cursor: pointer; list-style: none; }
+details.kind summary::-webkit-details-marker { display: none; }
+details.kind summary::before { content: '▸'; color: var(--muted); }
+details.kind[open] summary::before { content: '▾'; }
+.kind-title { font-weight: 700; flex: 1 1 100%; }
+details.kind summary .chips { margin: 0; }
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 6px; margin: .3rem 0 .6rem; }
+.thumb { position: relative; padding: 0; border: 0; border-radius: 8px; overflow: hidden; background: #000; aspect-ratio: 1; cursor: pointer; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb span {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 1px 4px; font-size: .65rem; color: #fff; text-align: left;
+  background: rgba(0, 0, 0, .6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sheet-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, .55); display: flex; align-items: flex-end; justify-content: center; }
+.sheet-panel {
+  width: min(100%, var(--page-w)); max-height: 94dvh; overflow-y: auto; background: var(--surface);
+  border-radius: 18px 18px 0 0; padding: 14px 16px max(16px, env(safe-area-inset-bottom));
+}
+.sample-img { position: relative; line-height: 0; border-radius: 10px; overflow: hidden; background: #000; }
+.sample-img img { width: 100%; height: auto; display: block; }
+.sample-img svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.sample-img rect { fill: none; stroke: rgba(255, 255, 255, .7); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.sample-img rect.hit { stroke: #51cf66; stroke-width: 3; }
+
 /* ───── Výkaz vozidel (podle formuláře, stránky po 20 vozech) ───── */
 
 main.output { max-width: none; }

@@ -1,12 +1,13 @@
-// Fotky pro trénink sítí: přehled, export do ZIPu (pro Google Disk a sešit v Colabu), úklid přes koš.
+// Fotky pro trénink sítí: přehled, na čem se síť učí, náhledy snímků s opravou hodnoty, export do ZIPu
+// (pro Google Disk a sešit v Colabu) a úklid přes koš.
 
 import { html, useEffect, useState } from '../../vendor/preact-htm.js';
-import { SWITCHES, plural } from '../model.js';
-import { FIELDS, HAND_BRAKE } from '../fields.js';
+import { SWITCHES, plural, formatDateTime } from '../model.js';
+import { FIELDS, FIELD, HAND_BRAKE, displayValue } from '../fields.js';
 import { db } from '../db.js';
 import { brakeModels } from '../brake.js';
 import { zip, download } from '../xlsx.js';
-import { Topbar, Icon, toast } from '../ui.js';
+import { Topbar, Icon, Seg, BlobImg, toast } from '../ui.js';
 
 // Druhy s volbou tlačítkem (přestavovače, nápravy, špalíky): fotky po složkách podle polohy, počty po polohách.
 const OPTIONS = {
@@ -24,6 +25,27 @@ const KINDS = {
   napis: 'Nápisy na voze (karta vozu)',
   rid: 'Tabulky RID',
 };
+
+// Co sešit training/trenink_prestavovacu.ipynb trénuje: síť na polohu z celé fotky (MIN_FOTEK v sešitu).
+const TRAINED = ['rezim', 'naklad', 'kohout', 'rucni', 'blocks', 'axles'];
+const MIN_PHOTOS = 8;
+
+/** Hodnota snímku k zobrazení (poloha, číslo vozu s mezerami, hmotnost s jednotkou…). */
+function labelText(s) {
+  if (OPTIONS[s.kind]) return optionText(s.kind, s.label);
+  if (FIELD[s.kind]) return displayValue(FIELD[s.kind], s.label) || s.label;
+  return s.label || '—';
+}
+
+/** Je druh připravený k tréninku? Aspoň dvě polohy s MIN_PHOTOS snímky; jinak co chybí. */
+function readiness(kind, counts) {
+  const opts = OPTIONS[kind].map(([v]) => v);
+  const enough = opts.filter((v) => (counts[v] ?? 0) >= MIN_PHOTOS);
+  if (enough.length >= 2) return { ready: true, text: `připraveno – trénovat se bude ${enough.map((v) => optionText(kind, v)).join(', ')}` };
+  // nejbližší dvě polohy k cíli
+  const missing = opts.map((v) => [v, MIN_PHOTOS - (counts[v] ?? 0)]).sort((a, b) => a[1] - b[1]).slice(0, 2).filter(([, n]) => n > 0);
+  return { ready: false, text: `chybí ještě ${missing.map(([v, n]) => `${optionText(kind, v)} ${n}×`).join(', ')}` };
+}
 
 const enc = new TextEncoder();
 const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -47,16 +69,92 @@ async function buildZip(samples) {
       s.extra ? JSON.stringify(s.extra) : '']
       .map(csvCell).join(';'));
   }
-  files.push({ name: 'labels.csv', data: enc.encode(`\ufeff${csv.join('\n')}\n`) });
+  files.push({ name: 'labels.csv', data: enc.encode(`﻿${csv.join('\n')}\n`) });
   return zip(files, 'application/zip');
+}
+
+/** Snímek s rámečky přečtených řádků: zeleně ten, který vozmistr potvrdil jako hledaný údaj. */
+function SampleImage({ s }) {
+  const ocr = s.ocr;
+  const hit = new Set([...(s.match ?? []), ...(s.match_extra?.hand_t ?? [])]);
+  return html`<div class="sample-img">
+    <${BlobImg} blob=${s.blob} />
+    ${ocr && html`<svg viewBox=${`0 0 ${ocr.w} ${ocr.h}`} preserveAspectRatio="none" aria-hidden="true">
+      ${ocr.lines.map((l, i) => html`<rect x=${l.x} y=${l.y} width=${l.w} height=${l.h}
+        class=${hit.has(i) ? 'hit' : ''} />`)}
+    </svg>`}
+  </div>`;
+}
+
+/** Detail snímku: co se uložilo, oprava hodnoty, přesun do koše. */
+function SampleDetail({ s, onClose, onChange }) {
+  const [label, setLabel] = useState(s.label ?? '');
+  const changed = label !== (s.label ?? '');
+
+  async function save() {
+    await db.updateSample({ ...s, label, relabeled_at: new Date().toISOString() });
+    toast('Hodnota opravena.');
+    onChange();
+  }
+  async function trash() {
+    if (!confirm('Přesunout tento snímek do koše? Do tréninku pak nepůjde.')) return;
+    await db.trashSample(s);
+    toast('Snímek je v koši.');
+    onChange();
+  }
+
+  return html`<div class="sheet-backdrop" onClick=${(e) => e.target === e.currentTarget && onClose()}>
+    <div class="sheet-panel">
+      <div class="row" style="margin-bottom:.5rem">
+        <h2 style="margin:0;flex:1">${KINDS[s.kind] ?? s.kind}</h2>
+        <button class="iconbtn" onClick=${onClose} aria-label="Zavřít"><${Icon} name="close" /></button>
+      </div>
+      <${SampleImage} s=${s} />
+      <p class="small muted" style="margin:.5rem 0">
+        ${[s.wagon && `vůz ${s.wagon}`, formatDateTime(s.created_at), s.source === 'trenink' ? 'z tréninku' : 'z karty vozu',
+          s.exported_at ? 'vyexportováno' : 'zatím neexportováno'].filter(Boolean).join(' · ')}
+        ${s.predicted?.label != null && html`<br />Aplikace četla: ${labelText({ ...s, label: s.predicted.label })}`}
+        ${s.extra && html`<br />Navíc: ${Object.entries(s.extra).filter(([, v]) => v != null).map(([k, v]) => `${k} = ${v}`).join(', ')}`}
+      </p>
+      <div class="field-title">Hodnota, na které se síť učí</div>
+      ${OPTIONS[s.kind]
+        ? html`<${Seg} value=${label} options=${OPTIONS[s.kind]} onChange=${setLabel} />`
+        : html`<input class="input" value=${label} onInput=${(e) => setLabel(e.target.value)} />
+            <div class="hint">${labelText({ ...s, label })}</div>`}
+      <div class="row" style="margin-top:.8rem">
+        <button class="btn danger" onClick=${trash}><${Icon} name="trash" size=${18} /> Do koše</button>
+        <span class="spacer"></span>
+        <button class="btn primary" disabled=${!changed} onClick=${save}><${Icon} name="check" size=${18} /> Uložit opravu</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/** Náhledy snímků jednoho druhu (u voleb po polohách), nejnovější první. */
+function Gallery({ kind, list, onOpen }) {
+  const [limit, setLimit] = useState(24);
+  const groups = OPTIONS[kind]
+    ? OPTIONS[kind].map(([v, t]) => [t, list.filter((s) => s.label === v)]).filter(([, l]) => l.length)
+    : [[null, list]];
+  return html`${groups.map(([title, items]) => html`
+    ${title && html`<div class="field-title">${title} (${items.length})</div>`}
+    <div class="gallery">
+      ${items.slice(0, limit).map((s) => html`<button type="button" class="thumb" onClick=${() => onOpen(s)} title=${labelText(s)}>
+        <${BlobImg} blob=${s.blob} />
+        ${!OPTIONS[kind] && html`<span>${labelText(s)}</span>`}
+      </button>`)}
+    </div>
+    ${items.length > limit && html`<button class="linkbtn small" onClick=${() => setLimit(limit + 48)}>Zobrazit další (${items.length - limit})</button>`}
+  `)}`;
 }
 
 export function DataView() {
   const [models, setModels] = useState({});
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(null);
 
   const [all, setAll] = useState(null);
-  const load = () => db.samples().then((list) => setAll(list.sort((a, b) => a.created_at.localeCompare(b.created_at))));
+  const load = () => db.samples().then((list) => setAll(list.sort((a, b) => b.created_at.localeCompare(a.created_at))));
   useEffect(() => { load(); brakeModels().then(setModels); }, []);
 
   if (!all) return html`<${Topbar} title="Data pro trénink" back="#/" /><main><p class="muted">Načítám…</p></main>`;
@@ -64,12 +162,9 @@ export function DataView() {
   const samples = all.filter((s) => !s.deleted_at);
   const trash = all.filter((s) => s.deleted_at);
   const fresh = samples.filter((s) => !s.exported_at);
-  const groups = {};
-  for (const s of samples) {
-    const g = (groups[s.kind] ??= { total: 0, labels: {} });
-    g.total++;
-    if (OPTIONS[s.kind]) g.labels[s.label] = (g.labels[s.label] ?? 0) + 1;
-  }
+  const byKind = {};
+  for (const s of samples) (byKind[s.kind] ??= []).push(s);
+  const counts = (kind) => (byKind[kind] ?? []).reduce((c, s) => ((c[s.label] = (c[s.label] ?? 0) + 1), c), {});
 
   // how = 'share' (nabídka sdílení telefonu) nebo 'download' (stažení souboru, v iPhonu do Souborů → Stažené)
   async function exportZip(list, how = 'share') {
@@ -117,28 +212,37 @@ export function DataView() {
     <${Topbar} title="Data pro trénink" back="#/" />
     <main>
       <a class="btn primary block" href="#/trenink" style="margin-bottom:12px"><${Icon} name="camera" /> Snímat pro trénink</a>
-      <div class="notice info">
-        Každý snímek se uloží s hodnotou, kterou vozmistr potvrdil. Z nich se v Colabu natrénuje síť,
-        která pak polohu pozná z fotky sama – i bez signálu. Na začátek stačí desítky fotek od každé polohy, spolehlivě to chce stovky.
+
+      <div class="card">
+        <h2>Na čem se síť učí</h2>
+        <p class="small muted" style="margin-top:0">Síť na polohu se natrénuje u údaje, který má aspoň dvě polohy,
+          každou s ${MIN_PHOTOS} a více snímky. Snímky nápisů se zatím sbírají pro pozdější doučení čtení textu.</p>
+        <ul class="train-list">
+          ${TRAINED.map((kind) => {
+            const r = readiness(kind, counts(kind));
+            return html`<li><span>${KINDS[kind]}</span>
+              ${models[kind] ? html`<b class="okc">síť nasazena</b>` : html`<b class=${r.ready ? 'okc' : 'muted'}>${r.text}</b>`}</li>`;
+          })}
+          <li><span>Nápisy (číslo, hmotnost, kN, délka, rychlost, revize)</span>
+            <b class="muted">${fotek(['cislo', 'tare', 'hand_kn', 'length', 'speed', 'revize'].reduce((n, k) => n + (byKind[k]?.length ?? 0), 0))} – sbírá se</b></li>
+        </ul>
       </div>
 
-      ${Object.entries(KINDS).map(([kind, title]) => {
-        const g = groups[kind];
-        return html`<div class="card">
-          <div class="row">
-            <h2 style="margin:0;flex:1">${title}</h2>
-            ${OPTIONS[kind] && (models[kind]
-              ? html`<span class="chip ok"><${Icon} name="brain" size=${14} /> síť nasazena</span>`
-              : html`<span class="chip warn">síť zatím není</span>`)}
-          </div>
-          <div class="chips">
-            ${!g ? html`<span class="muted small">žádné fotky</span>`
-              : OPTIONS[kind]
-                ? OPTIONS[kind].map(([v]) => html`<span class="chip">${optionText(kind, v)}: ${g.labels[v] ?? 0}</span>`)
-                : html`<span class="chip">${plural(g.total, 'fotka', 'fotky', 'fotek')}</span>`}
-          </div>
-        </div>`;
+      ${Object.entries(KINDS).filter(([kind]) => byKind[kind]?.length).map(([kind, title]) => {
+        const list = byKind[kind];
+        const c = counts(kind);
+        return html`<details class="card kind">
+          <summary>
+            <span class="kind-title">${title}</span>
+            <span class="chips">${OPTIONS[kind]
+              ? OPTIONS[kind].filter(([v]) => c[v]).map(([v]) => html`<span class="chip">${optionText(kind, v)}: ${c[v]}</span>`)
+              : html`<span class="chip">${plural(list.length, 'fotka', 'fotky', 'fotek')}</span>`}</span>
+          </summary>
+          <p class="hint" style="margin-top:.2rem">Ťukněte na snímek: uvidíte, co přesně se uložilo, a můžete opravit hodnotu nebo ho dát do koše.</p>
+          <${Gallery} kind=${kind} list=${list} onOpen=${setOpen} />
+        </details>`;
       })}
+      ${!samples.length && html`<div class="notice info">Zatím žádné snímky. Nasbírejte je tlačítkem Snímat pro trénink.</div>`}
 
       <div class="card">
         <p style="margin-top:0">Nových fotek k exportu: <b>${fresh.length}</b> (celkem ${samples.length}).</p>
@@ -148,7 +252,8 @@ export function DataView() {
           <button class="btn" disabled=${busy || !samples.length} onClick=${() => exportZip(samples)}>Exportovat vše</button>
         </div>
         <p class="hint">V nabídce sdílení zvolte <b>Disk</b> a složku <b>Vykaz_vozu_data</b> (nebo <b>Uložit do Souborů</b>).
-          Na Disku musí být soubor <b>.zip</b> o velikosti v MB – ne text s názvem.</p>
+          Na Disku musí být soubor <b>.zip</b> o velikosti v MB – ne text s názvem. Opravené hodnoty se do Colabu
+          dostanou novým exportem (<b>Exportovat vše</b>).</p>
         <button class="linkbtn small" disabled=${busy || !samples.length} onClick=${() => exportZip(samples, 'download')}>
           <${Icon} name="download" size=${16} /> Stáhnout všechno jako ZIP do telefonu</button>
         <div class="row" style="margin-top:.4rem">
@@ -170,5 +275,6 @@ export function DataView() {
           <button class="btn danger" onClick=${emptyTrash}>Vysypat koš</button>
         </div>
       </div>`}
-    </main>`;
+    </main>
+    ${open && html`<${SampleDetail} s=${open} onClose=${() => setOpen(null)} onChange=${() => { setOpen(null); load(); }} />`}`;
 }

@@ -172,6 +172,7 @@ export function Trainer({ onClose }) {
   const [tapped, setTapped] = useState(null);        // index řádku, na který vozmistr ťukl
   const [touched, setTouched] = useState(false);
   const [saved, setSaved] = useState(0);
+  const [flash, setFlash] = useState(null);          // právě uložený snímek: { url, text, key }
   const [busy, setBusy] = useState(false);
   const [, setTick] = useState(0);
   const light = useCameraLight();
@@ -374,6 +375,15 @@ export function Trainer({ onClose }) {
     setBusy(false);
   }
 
+  // Uložený trénovací snímek: obrazovka problikne a v rohu se na chvíli ukáže, co přesně se uložilo.
+  function announce(blob, text) {
+    setSaved((n) => n + 1);
+    const url = URL.createObjectURL(blob);
+    const key = Date.now();
+    setFlash((old) => { if (old) URL.revokeObjectURL(old.url); return { url, text, key }; });
+    setTimeout(() => setFlash((f) => { if (f?.key !== key) return f; URL.revokeObjectURL(f.url); return null; }), 2600);
+  }
+
   // dvojité ťuknutí na Potvrdit nesmí uložit snímek dvakrát
   const saving = useRef(false);
   async function confirm() {
@@ -414,7 +424,7 @@ export function Trainer({ onClose }) {
         ocr: shot.lines.length ? ocrRecord(small) : null,
         match: tapped !== null ? [tapped] : shot === frame ? matchedLines(value) : [],
       });
-      setSaved((n) => n + 1);
+      announce(blob, `${field.title}: ${displayValue(field, value)}`);
     }
     vibrate(50);
     const next = { ...values, [field.key]: value };
@@ -441,7 +451,7 @@ export function Trainer({ onClose }) {
         match: tapped !== null ? [tapped] : matchingLines(field, frame.lines, tare),
         match_extra: { hand_t: handT ? matchingLines(HAND_T, frame.lines, handT) : [] },
       });
-      setSaved((n) => n + 1);
+      announce(blob, `${field.title}: ${[displayValue(field, tare), handT && displayValue(HAND_T, handT), HAND_BRAKE.find(([v]) => v === choice)?.[1]].filter(Boolean).join(' · ')}`);
       // výřez obou řádků s rámečkem – z těchto výřezů se později naučí síť poznat barvu rámečku
       if (choice !== 'nema' && cand?.lines?.length && tLines.length) {
         const box = hull([...cand.lines, ...tLines].map((i) => frame.lines[i]));
@@ -485,7 +495,7 @@ export function Trainer({ onClose }) {
         ocr: ocrRecord(small),
         match: tapped !== null ? [tapped] : cand?.lines ?? [],
       });
-      setSaved((n) => n + 1);
+      announce(blob, `${field.title}: ${displayValue(field, value)}`);
     }
     const st = revisionStatus(r);
     if (st.expired) {
@@ -607,6 +617,9 @@ export function Trainer({ onClose }) {
       <video ref=${videoRef} playsinline muted autoplay hidden=${camera !== 'live' || frozen} style=${light.filter}></video>
       <canvas ref=${stillRef} class="still" hidden=${!frozen}></canvas>
       <div class="boxes">${boxes}</div>
+      ${flash && html`<div class="flash" key=${flash.key}></div>
+        <div class="saved-shot" key=${`s${flash.key}`}><img src=${flash.url} alt="" />
+          <div><b>Uloženo pro trénink</b><span>${flash.text}</span></div></div>`}
       <div class="top">
         <button class="iconbtn" onClick=${onClose} aria-label="Zavřít"><${Icon} name="close" /></button>
         ${frozen && !done && camera === 'live' && html`<button class="btn small" onClick=${() => { setFrozen(false); setTapped(null); }}>
