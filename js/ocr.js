@@ -1,8 +1,13 @@
 // Čtení textu z fotky přímo v telefonu, bez internetu: neuronové sítě PaddleOCR (PP-OCRv5 mobile)
-// přes ONNX Runtime Web. det.onnx najde na fotce řádky textu, rec.onnx každý řádek přečte.
+// přes ONNX Runtime Web. det.onnx najde na fotce řádky textu, rec_latin.onnx každý řádek přečte
+// (model pro latinku včetně české diakritiky; na snímcích uživatele čte číslice stejně dobře jako anglický).
 // Modely (asi 13 MB) a runtime (11 MB) se stáhnou jednou, pak je drží service worker v cache.
 
 import { ort, BASE, createSession } from './ort.js';
+
+// Čtecí síť a její slovník (pořadí znaků = třídy sítě). configureOcr jen pro porovnávání modelů v test/.
+const REC = { model: 'models/rec_latin.onnx', dict: 'models/rec_latin_dict.txt' };
+export function configureOcr(opts) { Object.assign(REC, opts); }
 
 let loading = null;
 let models = null;
@@ -12,10 +17,11 @@ export function loadOcr() {
   loading ??= (async () => {
     const [det, rec, dictText] = await Promise.all([
       createSession('models/det.onnx'),
-      createSession('models/rec.onnx'),
-      fetch(new URL('models/rec_dict.txt', BASE)).then((r) => r.text()),
+      createSession(REC.model),
+      fetch(new URL(REC.dict, BASE)).then((r) => r.text()),
     ]);
     const lines = dictText.replace(/\r/g, '').split('\n');
+    if (lines[0] === '') lines.shift();   // některé kopie slovníků mají navíc prázdný první řádek
     if (lines.at(-1) === '') lines.pop();
     // Třída 0 = „prázdno“ (CTC blank), za slovníkem ještě mezera.
     models = { det, rec, chars: ['', ...lines, ' '] };
@@ -142,6 +148,7 @@ async function recognize(src, box) {
   const out = await rec.run({ [rec.inputNames[0]]: new ort.Tensor('float32', input, [1, 3, REC_H, padW]) });
   const res = out[rec.outputNames[0]];
   const [, steps, classes] = res.dims;
+  if (classes !== chars.length) console.warn(`OCR: síť má ${classes} tříd, slovník ${chars.length} znaků`);
   const p = res.data;
   let text = '';
   const confs = [];

@@ -38,7 +38,7 @@ Zdroje: [OTIF UTP Marking 2021](https://otif.org/fileadmin/new/3-Reference-Text/
 
 Každé potvrzení uloží snímek, potvrzenou hodnotu, všechen přečtený text s rámečky a označený nápis. Z toho se natrénuje síť, která pozná, který nápis je který údaj, a sítě na přestavovače.
 
-Údaje se zatím hledají pravidly: hmotnost = číslo s kg mezi 8 a 60 t, síla zajišťovací brzdy = samostatné číslo s t, zajišťovací síla = číslo s kN, délka = nejdelší číslo s m mezi 8 a 40, rychlost = číslo s km/h (bez jednotky SS v tabulce zatížení = 120, S = 100), revize = řádek s nápisem REV, a když ho síť nepřečte, datum s kódem dílny vlevo („REV 1003 18.06.26“). Nula přečtená jako písmeno o („20.ot“) se opraví. Čtecí síť nezná českou diakritiku (ŽOS přečte jako OS) – text revize je potřeba opravit.
+Písmo se čte z plného rozlišení kamery nebo fotky (hledání nápisů na zmenšeném snímku, čtení z výřezu v plné velikosti) a z živé kamery se hodnota nabídne, až se přečte stejně aspoň ve dvou snímcích po sobě („ověřuji…“). Údaje se zatím hledají pravidly: hmotnost = číslo s kg mezi 8 a 60 t, síla zajišťovací brzdy = samostatné číslo s t, zajišťovací síla = číslo s kN, délka = nejdelší číslo s m mezi 8 a 40, rychlost = číslo s km/h (bez jednotky SS v tabulce zatížení = 120, S = 100), revize = řádek s nápisem REV, a když ho síť nepřečte, datum s kódem dílny vlevo („REV 1003 18.06.26“). Nula přečtená jako písmeno o („20.ot“) se opraví. Čtecí síť je model pro latinku s českou diakritikou (Ž, Č, Ř…).
 
 ## Trénink sítě na přestavovače
 
@@ -75,7 +75,7 @@ js/frame.js                               barva rámečku síly zajišťovací b
 js/db.js                                  úložiště v telefonu (IndexedDB)
 js/xlsx.js                                zápis Excelu a ZIPu bez knihoven
 js/views/*.js                             obrazovky: výkazy, výkaz, skener, vůz, výstup, data, trénink (trainer.js)
-models/                                   sítě PP-OCRv5 mobile (det.onnx, rec.onnx, slovník; Apache 2.0)
+models/                                   sítě PP-OCRv5 mobile (det.onnx, rec_latin.onnx – latinka s českou diakritikou, slovník; Apache 2.0)
 vendor/                                   Preact + htm, onnxruntime-web 1.20.1
 training/trenink_prestavovacu.ipynb       trénink sítí na přestavovače v Colabu
 tools/ikony.py                            ikony aplikace

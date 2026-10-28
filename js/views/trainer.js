@@ -18,15 +18,35 @@ import { handBrakeFrame, hull } from '../frame.js';
 import { seriesInfo, axlesText } from '../series.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const MAX_SIDE = 1280;
+const MAX_SIDE = 1280;    // ukládaný snímek pro trénink
+const READ_SIDE = 3024;   // snímek pro čtení: písmo se čte z plného rozlišení kamery / fotky (12 Mpx → ~7 Mpx)
 
-function grabFrame(src, w, h) {
-  const k = Math.min(1, MAX_SIDE / Math.max(w, h));
+function grabFrame(src, w, h, max = MAX_SIDE) {
+  const k = Math.min(1, max / Math.max(w, h));
   const c = document.createElement('canvas');
   c.width = Math.round(w * k);
   c.height = Math.round(h * k);
   c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
   return c;
+}
+
+// Hlasování přes snímky: hodnota se nabídne, až ji síť přečte stejně aspoň ve dvou snímcích po sobě
+// (starší hlasy slábnou). Jednorázové chyby čtení („20.ot“, useknuté číslo) tak návrh nerozhodí.
+function votes() {
+  const m = new Map();
+  return {
+    add(v) {
+      for (const [k, x] of m) m.set(k, x * 0.6);
+      if (v != null && v !== '') m.set(v, (m.get(v) ?? 0) + 1);
+    },
+    best(min = 1.5) {
+      let best = null;
+      let score = 0;
+      for (const [k, x] of m) if (x > score) { best = k; score = x; }
+      return score >= min ? best : null;
+    },
+    clear() { m.clear(); },
+  };
 }
 
 // Souřadnice snímku → souřadnice prvku na obrazovce (object-fit: cover u videa, contain u zastaveného snímku).
@@ -42,6 +62,17 @@ function editable(field, value) {
   if (field.type === 'number') return formatNumber(value);
   if (field.type === 'qty') return String(value).replace('.', ',');
   return value;
+}
+
+// Zmenšená kopie přečteného snímku k uložení (rámečky řádků přepočtené na jeho velikost).
+function shrink(f) {
+  const k = Math.min(1, MAX_SIDE / Math.max(f.w, f.h));
+  if (k === 1) return f;
+  const canvas = grabFrame(f.canvas, f.w, f.h);
+  return {
+    canvas, w: canvas.width, h: canvas.height,
+    lines: f.lines.map((l) => ({ ...l, x: l.x * k, y: l.y * k, w: l.w * k, h: l.h * k })),
+  };
 }
 
 const round = (v) => Math.round(v);
@@ -142,6 +173,7 @@ export function Trainer({ onClose }) {
   const [busy, setBusy] = useState(false);
   const [, setTick] = useState(0);
   const light = useCameraLight();
+  const vote = useRef({ main: votes(), t: votes(), color: votes() });
   const live = useRef({});
   live.current = { key: current, frozen, touched, gain: light.gain, info };
 
@@ -172,7 +204,7 @@ export function Trainer({ onClose }) {
       while (!stopped) {
         const { key: k, frozen: fz } = live.current;
         if (fz || !k || video.readyState < 2) { await sleep(150); continue; }
-        const c = applyGain(grabFrame(video, video.videoWidth, video.videoHeight), live.current.gain);
+        const c = applyGain(grabFrame(video, video.videoWidth, video.videoHeight, READ_SIDE), live.current.gain);
         // u přestavovačů a náprav se text nečte (nic v něm nehledáme), jen se snímek předá síti
         const needsText = FIELD[k].type !== 'switch' || FIELD[k].key === 'blocks';
         const lines = needsText ? await readText(c).catch(() => []) : [];
@@ -215,15 +247,23 @@ export function Trainer({ onClose }) {
   }, [info, current]);
 
   // Návrh hodnoty kroku: u voleb natrénovaná síť (pokud už je), jinak pravidlo nad přečteným textem.
+  // Z živé kamery až po shodě ve více snímcích (hlasování), z fotky hned (single).
   // Co vozmistr už sám zvolil nebo napsal, se nepřepíše.
-  async function suggest(f, canvas, lines) {
+  async function suggest(f, canvas, lines, single = false) {
+    const v = vote.current;
+    const pick = (box, value) => {
+      if (single) return value ?? null;
+      box.add(value);
+      return box.best();
+    };
+    const keep = () => live.current.touched;
     if (f.type === 'switch') {
       const p = await predictSwitch(f.key, canvas).catch(() => null);
       const found = p ? null : extractField(f, lines);
+      const best = pick(v.main, p?.label ?? found?.value);
       setPred(p);
-      setCand(found);
-      const v = p?.label ?? found?.value;
-      if (v && !live.current.touched) setChoice(v);
+      setCand(found ? { ...found, stable: best === found.value } : null);
+      if (best && !keep()) setChoice(best);
     } else if (f.type === 'weight') {
       // hmotnost, pod ní síla zajišťovací brzdy (t) a barva jejího rámečku
       const found = extractField(f, lines);
@@ -231,25 +271,30 @@ export function Trainer({ onClose }) {
       const color = found && t?.below
         ? handBrakeFrame(canvas, hull(found.lines.map((i) => lines[i])), hull(t.lines.map((i) => lines[i])))
         : null;
-      setCand(found);
+      const tare = pick(v.main, found?.value);
+      const handT = pick(v.t, t?.value);
+      const frameValue = pick(v.color, found ? (t ? color?.value : 'nema') : null);
+      setCand(found ? { ...found, stable: tare === found.value } : null);
       setCand2(t);
       setFrameColor(color);
-      if (!live.current.touched) {
-        if (found) setInput(editable(f, found.value));
-        if (t) setInput2(editable(HAND_T, t.value));
-        if (found) setChoice(t ? color?.value ?? null : 'nema');
+      if (!keep()) {
+        if (tare) setInput(editable(f, tare));
+        if (handT) setInput2(editable(HAND_T, handT));
+        if (frameValue) setChoice(frameValue);
       }
     } else {
       // rychlost, kterou z nápisů nejde přečíst, se navrhne podle řady (s = 100 km/h, ss = 120 km/h)
       const seriesSpeed = f.key === 'speed' && live.current.info?.speed;
       const found = extractField(f, lines) ?? (seriesSpeed ? { value: String(seriesSpeed), lines: [], series: true } : null);
-      setCand(found);
-      if (found && !live.current.touched) setInput(editable(f, found.value));
+      const best = pick(v.main, found?.value);
+      setCand(found ? { ...found, stable: best === found.value } : null);
+      if (best && !keep()) setInput(editable(f, best));
     }
   }
 
   // Přechod na krok (klíč; null = souhrn vozu). Na už potvrzeném kroku zůstane potvrzená hodnota.
   function goTo(key, vals = values) {
+    for (const b of Object.values(vote.current)) b.clear();
     setCurrent(key);
     setFrozen(false);
     setCand(null);
@@ -297,11 +342,11 @@ export function Trainer({ onClose }) {
     setBusy(true);
     try {
       const bmp = await createImageBitmap(file);
-      const c = grabFrame(bmp, bmp.width, bmp.height);
-      const lines = await readText(c);
+      const c = grabFrame(bmp, bmp.width, bmp.height, READ_SIDE);
+      const lines = await readText(c, { maxSide: 1600 });
       setFrame({ canvas: c, lines, w: c.width, h: c.height });
       setFrozen(true);
-      await suggest(field, c, lines);
+      await suggest(field, c, lines, true);
     } catch (e) {
       toast(`Fotku se nepodařilo přečíst: ${e.message}`);
     }
@@ -333,7 +378,8 @@ export function Trainer({ onClose }) {
       shot = { canvas: c, lines: [], w: c.width, h: c.height };
     }
     if (shot) {
-      const blob = await new Promise((r) => shot.canvas.toBlob(r, 'image/jpeg', 0.82));
+      const small = shrink(shot);
+      const blob = await new Promise((r) => small.canvas.toBlob(r, 'image/jpeg', 0.82));
       await db.addSample({
         id: uid(),
         kind: field.key,
@@ -343,7 +389,7 @@ export function Trainer({ onClose }) {
         created_at: new Date().toISOString(),
         source: 'trenink',
         predicted: pred ? { label: pred.label, prob: pred.prob } : cand ? { label: cand.value } : null,
-        ocr: shot.lines.length ? ocrRecord(shot) : null,
+        ocr: shot.lines.length ? ocrRecord(small) : null,
         match: tapped !== null ? [tapped] : shot === frame ? matchedLines(value) : [],
       });
       setSaved((n) => n + 1);
@@ -361,14 +407,15 @@ export function Trainer({ onClose }) {
     if (!tare) return toast('Zadejte vlastní hmotnost, nebo zvolte „Na voze není“.');
     if (!choice) return toast('Zvolte, odkud se ruční brzda obsluhuje (nebo že ji vůz nemá).');
     if (frame) {
-      const blob = await new Promise((r) => frame.canvas.toBlob(r, 'image/jpeg', 0.82));
+      const small = shrink(frame);
+      const blob = await new Promise((r) => small.canvas.toBlob(r, 'image/jpeg', 0.82));
       const tLines = cand2?.lines ?? [];
       await db.addSample({
         id: uid(), kind: 'tare', label: tare, blob,
         wagon: values.cislo ?? '', created_at: new Date().toISOString(), source: 'trenink',
         predicted: cand ? { label: cand.value, hand_t: cand2?.value, hand_brake: frameColor?.value } : null,
         extra: { hand_t: choice === 'nema' ? null : handT || null, hand_brake: choice },
-        ocr: ocrRecord(frame),
+        ocr: ocrRecord(small),
         match: tapped !== null ? [tapped] : matchingLines(field, frame.lines, tare),
         match_extra: { hand_t: handT ? matchingLines(HAND_T, frame.lines, handT) : [] },
       });
@@ -382,8 +429,9 @@ export function Trainer({ onClose }) {
         const w = Math.min(frame.w - x, box.w + 2 * pad);
         const h = Math.min(frame.h - y, box.h + 2 * pad);
         const c = document.createElement('canvas');
-        c.width = Math.round(w);
-        c.height = Math.round(h);
+        const k = Math.min(1, 480 / Math.max(w, h));   // výřez z plného rozlišení, nejvýš 480 bodů
+        c.width = Math.round(w * k);
+        c.height = Math.round(h * k);
         c.getContext('2d').drawImage(frame.canvas, x, y, w, h, 0, 0, c.width, c.height);
         const crop = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
         await db.addSample({
@@ -468,7 +516,7 @@ export function Trainer({ onClose }) {
       <${Seg} value=${choice} options=${HAND_BRAKE} bad=${['cerveny']} onChange=${(v) => { setChoice(v); setTouched(true); }} />
       <div class="hint">${choice ? html`→ <b>${HAND_BRAKE_MEANING[choice]}</b>` : 'červený = pořádací brzda ze země · jiná barva (černá, bílá…) = ruční brzda z plošiny'}</div>
       <div class="hint">
-        ${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand2 ? html` · <b>${displayValue(HAND_T, cand2.value)}</b>` : ''}${why ? ` · ${why}` : ''}`
+        ${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand2 ? html` · <b>${displayValue(HAND_T, cand2.value)}</b>` : ''}${why ? ` · ${why}` : ''}${cand.stable ? '' : ' (ověřuji…)'}`
           : 'Nic nenalezeno – přibližte se, nebo ťukněte na nápis.'}
         ${knownValue && html` · v paměti: ${knownValue}`}
       </div>`;
@@ -528,7 +576,7 @@ export function Trainer({ onClose }) {
                   onFocus=${freeze}
                   onInput=${(e) => { setTouched(true); setInput(field.type === 'number' ? formatNumber(e.target.value) : e.target.value); }} />
                 <div class="hint">
-                  ${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>` : 'Nic nenalezeno – přibližte se, nebo ťukněte na správný nápis v obraze.'}
+                  ${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand.stable ? '' : ' (ověřuji…)'}` : 'Nic nenalezeno – přibližte se, nebo ťukněte na správný nápis v obraze.'}
                   ${knownValue && html` · v paměti: ${knownValue}`}
                 </div>`}
           <div class="row" style="margin-top:.6rem">

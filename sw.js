@@ -3,7 +3,7 @@
 // Velké soubory (neuronové sítě, ONNX runtime) jsou ve vlastní zásobě MODELS, aby se při každé nové verzi
 // aplikace nestahovalo znovu 25 MB. Při změně čtecích sítí zvýšit MODELS.
 
-const CACHE = 'vykaz-v13'; // zvýšit spolu s APP_VERSION v js/version.js
+const CACHE = 'vykaz-v14'; // zvýšit spolu s APP_VERSION v js/version.js
 const MODELS = 'vykaz-modely-v1';
 
 const SHELL = [
@@ -15,7 +15,7 @@ const SHELL = [
   'vendor/preact-htm.js', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 const BIG = ['vendor/ort/ort.wasm.min.mjs', 'vendor/ort/ort-wasm-simd-threaded.mjs',
-  'vendor/ort/ort-wasm-simd-threaded.wasm', 'models/det.onnx', 'models/rec.onnx', 'models/rec_dict.txt'];
+  'vendor/ort/ort-wasm-simd-threaded.wasm', 'models/det.onnx', 'models/rec_latin.onnx', 'models/rec_latin_dict.txt'];
 
 // Soubor aplikace podle cesty → klíč v paměti; parametr v adrese se nebere v úvahu (razítko ?r=… z index.html)
 const SHELL_KEYS = new Map(SHELL.map((u) => { const x = new URL(u, location.href); return [x.pathname, x.href]; }));
@@ -52,6 +52,10 @@ self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
     const old = (await caches.keys()).filter((k) => k !== CACHE && k !== MODELS);
     await Promise.all(old.map((k) => caches.delete(k)));
+    // ze zásoby sítí vyhodit soubory, které už aplikace nepoužívá (např. dřívější anglický model)
+    const models = await caches.open(MODELS);
+    const keep = new Set(BIG.map((p) => new URL(p, location.href).pathname));
+    for (const req of await models.keys()) if (!keep.has(new URL(req.url).pathname)) await models.delete(req);
     await self.clients.claim();
     if (old.length) {
       for (const c of await self.clients.matchAll({ type: 'window' })) c.postMessage({ type: 'updated' });
