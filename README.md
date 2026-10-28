@@ -21,6 +21,7 @@ Vše se ukládá jen v telefonu (v prohlížeči). Ven se data dostanou exportem
 
 - Kamera čte text v celém záběru a kolem přečtených nápisů kreslí rámečky. Zeleně je nápis, který aplikace považuje za hledaný údaj, a jeho hodnota je předvyplněná dole.
 - **Potvrdit** = hodnota sedí. Když nesedí, hodnotu přepište, nebo ťukněte na správný nápis v obraze (zežloutne). Ťuknutím nebo psaním se obraz zastaví, aby se uložil přesně ten snímek; **Zpět ke kameře** ho pustí dál.
+- **Světlo** (vpravo nahoře, i ve skeneru čísla vozu): žárovka zapne a vypne svítilnu, sluníčko ukáže posuvník **Jas** (−2 až +2, pamatuje se). Sílu světla svítilny webová aplikace nastavit neumí – iPhone ani Android to webu nedovolí, jen zapnout a vypnout. Jas proto mění obraz: kde to kamera umí (část Androidů), korekcí expozice (ztmavení pomůže proti odleskům reflexních nápisů), jinak softwarově – stejně se upraví i snímek, který se čte a ukládá.
 - **Na voze není** = údaj na voze chybí, krok se přeskočí. **Fotka** pořídí snímek fotoaparátem (ostřejší než živý obraz).
 - Počet náprav, druh špalíků a přestavovače se volí tlačítkem (nápravy předvolené na 4, u špalíků aplikace nabídne LL/K/L, když je na snímku samostatný nápis).
 - Na konci se ukáže souhrn a **Uložit a další vůz** uloží údaje k číslu vozu (příště se ve výkazu vyplní samy).
@@ -59,6 +60,7 @@ js/model.js                               číslo vozu, hledání čísla v text
 js/ocr.js, js/ort.js                      čtení textu sítěmi PaddleOCR přes ONNX Runtime Web
 js/brake.js                               odhad polohy přestavovače vlastní sítí (models/brzdy.json)
 js/fields.js                              údaje snímané při obchůzce a pravidla, jak je najít v textu
+js/light.js                               svítilna a jas obrazu kamery
 js/db.js                                  úložiště v telefonu (IndexedDB)
 js/xlsx.js                                zápis Excelu a ZIPu bez knihoven
 js/views/*.js                             obrazovky: výkazy, výkaz, skener, vůz, výstup, data, trénink (trainer.js)

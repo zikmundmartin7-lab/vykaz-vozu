@@ -6,6 +6,7 @@ import { html, useEffect, useRef, useState } from '../../vendor/preact-htm.js';
 import { loadOcr, readText } from '../ocr.js';
 import { numberCandidates, formatNumber, isCompleteNumber, toJpeg } from '../model.js';
 import { Icon, NumberInput, PhotoButton, WagonNumber, vibrate } from '../ui.js';
+import { useCameraLight, LightButtons, BrightnessSlider, applyGain } from '../light.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const DECAY = 0.8;      // hlasy z předchozích snímků slábnou
@@ -31,6 +32,7 @@ function grab(video, r, canvas) {
   canvas.width = Math.round(r.w * k);
   canvas.height = Math.round(r.h * k);
   canvas.getContext('2d', { willReadFrequently: true }).drawImage(video, r.x, r.y, r.w, r.h, 0, 0, canvas.width, canvas.height);
+  return canvas;
 }
 
 /**
@@ -41,17 +43,18 @@ export function Scanner({ onDone, onClose, position }) {
   const videoRef = useRef();
   const guideRef = useRef();
   const pausedRef = useRef(false);
-  const trackRef = useRef();
   const [state, setState] = useState('start'); // start | scan | nocamera
   const [ready, setReady] = useState(false);
   const [reading, setReading] = useState('');
   const [found, setFound] = useState(null);     // { number, blob }
   const [maybe, setMaybe] = useState([]);
   const [manual, setManual] = useState(null);   // rozepsané číslo při ručním zadání
-  const [torch, setTorch] = useState(null);     // null = svítilnu telefon neumí
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
+  const light = useCameraLight();
+  const gainRef = useRef(1);
+  gainRef.current = light.gain;
   pausedRef.current = Boolean(found || manual !== null || busy);
 
   useEffect(() => {
@@ -73,9 +76,7 @@ export function Scanner({ onDone, onClose, position }) {
       const video = videoRef.current;
       video.srcObject = stream;
       await video.play().catch(() => {});
-      const track = stream.getVideoTracks()[0];
-      trackRef.current = track;
-      if (track.getCapabilities?.().torch) setTorch(false);
+      light.attach(stream.getVideoTracks()[0]);
       setState('scan');
       await loadOcr().catch(() => {});
       const canvas = document.createElement('canvas');
@@ -85,7 +86,7 @@ export function Scanner({ onDone, onClose, position }) {
           await sleep(150);
           continue;
         }
-        grab(video, guideRegion(video, guideRef.current), canvas);
+        applyGain(grab(video, guideRegion(video, guideRef.current), canvas), gainRef.current);
         const lines = await readText(canvas).catch(() => []);
         if (stopped || pausedRef.current) continue;
         setReading(lines.filter((l) => /\d/.test(l.text)).map((l) => l.text).join('  ').slice(0, 40));
@@ -111,11 +112,6 @@ export function Scanner({ onDone, onClose, position }) {
       stream?.getTracks().forEach((t) => t.stop());
     };
   }, []);
-
-  async function toggleTorch() {
-    const on = !torch;
-    await trackRef.current?.applyConstraints({ advanced: [{ torch: on }] }).then(() => setTorch(on), () => setTorch(null));
-  }
 
   async function fromPhoto(file) {
     setBusy(true);
@@ -146,16 +142,16 @@ export function Scanner({ onDone, onClose, position }) {
             <p><b>Kamera není dostupná.</b></p>
             <p class="small">Povolte aplikaci přístup ke kameře, nebo číslo vyfoťte fotoaparátem či zadejte ručně.</p>
           </div>`
-        : html`<video ref=${videoRef} playsinline muted autoplay></video>
+        : html`<video ref=${videoRef} playsinline muted autoplay style=${light.filter}></video>
             <div ref=${guideRef} class=${`guide ${found ? 'hit' : ''}`}></div>
             <div class="tip">${busy ? 'Čtu fotku…' : tip}</div>
             <div class="reading">${!found && reading}</div>`}
       <div class="top">
         <button class="iconbtn" onClick=${onClose} aria-label="Zavřít"><${Icon} name="close" /></button>
         <span class="spacer"></span>
-        ${torch !== null && html`<button class="iconbtn" onClick=${toggleTorch} aria-label="Svítilna"
-          style=${torch ? 'background:#ffd43b;color:#000' : ''}><${Icon} name="light" /></button>`}
+        ${state === 'scan' && html`<${LightButtons} light=${light} />`}
       </div>
+      <${BrightnessSlider} light=${light} wide />
     </div>
 
     <div class="panel">

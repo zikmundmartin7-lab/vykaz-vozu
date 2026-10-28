@@ -13,6 +13,7 @@ import {
 import { db } from '../db.js';
 import { uid, formatNumber, isValidCheckDigit } from '../model.js';
 import { Icon, Seg, PhotoButton, vibrate, toast } from '../ui.js';
+import { useCameraLight, LightButtons, BrightnessSlider, applyGain } from '../light.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MAX_SIDE = 1280;
@@ -133,8 +134,9 @@ export function Trainer({ onClose }) {
   const [saved, setSaved] = useState(0);
   const [busy, setBusy] = useState(false);
   const [, setTick] = useState(0);
+  const light = useCameraLight();
   const live = useRef({});
-  live.current = { key: current, frozen, touched };
+  live.current = { key: current, frozen, touched, gain: light.gain };
 
   const field = current ? FIELD[current] : null;
   const done = !field;
@@ -157,12 +159,13 @@ export function Trainer({ onClose }) {
       const video = videoRef.current;
       video.srcObject = stream;
       await video.play().catch(() => {});
+      light.attach(stream.getVideoTracks()[0]);
       setCamera('live');
       await loadOcr().catch(() => {});
       while (!stopped) {
         const { key: k, frozen: fz } = live.current;
         if (fz || !k || video.readyState < 2) { await sleep(150); continue; }
-        const c = grabFrame(video, video.videoWidth, video.videoHeight);
+        const c = applyGain(grabFrame(video, video.videoWidth, video.videoHeight), live.current.gain);
         const lines = await readText(c).catch(() => []);
         if (stopped || live.current.frozen || live.current.key !== k) continue;
         setFrame({ canvas: c, lines, w: c.width, h: c.height });
@@ -350,14 +353,17 @@ export function Trainer({ onClose }) {
     <div class="view" ref=${viewRef}>
       ${camera === 'none' && !frozen && html`<div class="msg"><p><b>Kamera není dostupná.</b></p>
         <p class="small">Snímek pořiďte tlačítkem Fotka.</p></div>`}
-      <video ref=${videoRef} playsinline muted autoplay hidden=${camera !== 'live' || frozen}></video>
+      <video ref=${videoRef} playsinline muted autoplay hidden=${camera !== 'live' || frozen} style=${light.filter}></video>
       <canvas ref=${stillRef} class="still" hidden=${!frozen}></canvas>
       <div class="boxes">${boxes}</div>
       <div class="top">
         <button class="iconbtn" onClick=${onClose} aria-label="Zavřít"><${Icon} name="close" /></button>
         ${frozen && !done && camera === 'live' && html`<button class="btn small" onClick=${() => { setFrozen(false); setTapped(null); }}>
           <${Icon} name="camera" size=${18} /> Zpět ke kameře</button>`}
+        <span class="spacer"></span>
+        ${camera === 'live' && html`<${LightButtons} light=${light} />`}
       </div>
+      <${BrightnessSlider} light=${light} />
       <${StepList} order=${order} current=${current} values=${values} onPick=${(k) => goTo(k)} onReorder=${reorder} />
       ${!done && html`<div class="ask">
         <div class="ask-n">${order.indexOf(current) + 1} / ${order.length} · uloženo snímků: ${saved}</div>
