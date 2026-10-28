@@ -23,7 +23,7 @@ Vše se ukládá jen v telefonu (v prohlížeči). Ven se data dostanou exportem
 - **Potvrdit** = hodnota sedí. Když nesedí, hodnotu přepište, nebo ťukněte na správný nápis v obraze (zežloutne). Ťuknutím nebo psaním se obraz zastaví, aby se uložil přesně ten snímek; **Zpět ke kameře** ho pustí dál.
 - **Světlo** (vpravo nahoře, i ve skeneru čísla vozu): žárovka zapne a vypne svítilnu, sluníčko ukáže posuvník **Jas** (−2 až +2, pamatuje se). Sílu světla svítilny webová aplikace nastavit neumí – iPhone ani Android to webu nedovolí, jen zapnout a vypnout. Jas proto mění obraz: kde to kamera umí (část Androidů), korekcí expozice (ztmavení pomůže proti odleskům reflexních nápisů), jinak softwarově – stejně se upraví i snímek, který se čte a ukládá.
 - **Na voze není** = údaj na voze chybí, krok se přeskočí. **Fotka** pořídí snímek fotoaparátem (ostřejší než živý obraz).
-- Počet náprav, druh špalíků a přestavovače se volí tlačítkem (nápravy předvolené na 4, u špalíků aplikace nabídne LL/K/L, když je na snímku samostatný nápis).
+- Počet náprav, druh špalíků a přestavovače se volí tlačítkem; snímek pro trénink se uloží sám při **Potvrdit** – přesně to, co je v tu chvíli na displeji (zvláštní fotka není potřeba) (nápravy předvolené na 4, u špalíků aplikace nabídne LL/K/L, když je na snímku samostatný nápis).
 - Na konci se ukáže souhrn a **Uložit a další vůz** uloží údaje k číslu vozu (příště se ve výkazu vyplní samy).
 
 - Kroky jsou vpravo pod sebou s popisem: bílý = právě snímaný, zelený s ✓ = potvrzený, přeškrtnutý = na voze není. **Ťuknutím** se na krok přejde, **tažením nahoru/dolů** se přesune jinam v pořadí (pořadí si telefon pamatuje). Po potvrzení aplikace přejde na další nevyplněný krok.

@@ -166,11 +166,13 @@ export function Trainer({ onClose }) {
         const { key: k, frozen: fz } = live.current;
         if (fz || !k || video.readyState < 2) { await sleep(150); continue; }
         const c = applyGain(grabFrame(video, video.videoWidth, video.videoHeight), live.current.gain);
-        const lines = await readText(c).catch(() => []);
+        // u přestavovačů a náprav se text nečte (nic v něm nehledáme), jen se snímek předá síti
+        const needsText = FIELD[k].type !== 'switch' || FIELD[k].key === 'blocks';
+        const lines = needsText ? await readText(c).catch(() => []) : [];
         if (stopped || live.current.frozen || live.current.key !== k) continue;
         setFrame({ canvas: c, lines, w: c.width, h: c.height });
         await suggest(FIELD[k], c, lines);
-        await sleep(60);
+        await sleep(needsText ? 60 : 400);
       }
     })();
     const onResize = () => setTick((x) => x + 1);
@@ -281,8 +283,16 @@ export function Trainer({ onClose }) {
       return;
     }
     if (field.type === 'number' && !isValidCheckDigit(value) && !confirmCheck(value)) return;
-    if (frame) {
-      const blob = await new Promise((r) => frame.canvas.toBlob(r, 'image/jpeg', 0.82));
+    // U voleb (přestavovače, nápravy, špalíky) se uloží snímek z okamžiku potvrzení – přesně to, co je na
+    // displeji. Poslední přečtený snímek může být kvůli čtení textu až sekundu starý a ukazovat jiné místo.
+    let shot = frame;
+    const video = videoRef.current;
+    if (field.type === 'switch' && !frozen && camera === 'live' && video?.readyState >= 2) {
+      const c = applyGain(grabFrame(video, video.videoWidth, video.videoHeight), light.gain);
+      shot = { canvas: c, lines: [], w: c.width, h: c.height };
+    }
+    if (shot) {
+      const blob = await new Promise((r) => shot.canvas.toBlob(r, 'image/jpeg', 0.82));
       await db.addSample({
         id: uid(),
         kind: field.key,
@@ -292,8 +302,8 @@ export function Trainer({ onClose }) {
         created_at: new Date().toISOString(),
         source: 'trenink',
         predicted: field.type === 'switch' ? (pred ? { label: pred.label, prob: pred.prob } : null) : (cand ? { label: cand.value } : null),
-        ocr: ocrRecord(frame),
-        match: tapped !== null ? [tapped] : matchedLines(value),
+        ocr: shot.lines.length ? ocrRecord(shot) : null,
+        match: tapped !== null ? [tapped] : shot === frame ? matchedLines(value) : [],
       });
       setSaved((n) => n + 1);
     }
