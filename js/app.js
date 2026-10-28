@@ -8,10 +8,11 @@
 //   #/data                   fotky pro trénink sítí
 
 import { html, render, useEffect, useState } from '../vendor/preact-htm.js';
-import { db, persist } from './db.js';
+import { db, persist, migrateHandBrake } from './db.js';
 import { loadOcr } from './ocr.js';
 import { newEntry, uid } from './model.js';
 import { seriesInfo } from './series.js';
+import { HAND_BRAKE_OLD } from './fields.js';
 import { Toasts, go } from './ui.js';
 import { HomeView } from './views/home.js';
 import { ReportView } from './views/report.js';
@@ -34,6 +35,7 @@ function App() {
     // Sítě se stáhnou a připraví hned po spuštění, ať je skener připravený i bez signálu.
     loadOcr().then(() => setOcr('ready'), () => setOcr('error'));
     persist();
+    migrateHandBrake(HAND_BRAKE_OLD).catch(() => {});
     return () => removeEventListener('hashchange', onHash);
   }, []);
 

@@ -1,5 +1,5 @@
-// Barva rámečku u síly zajišťovací brzdy (t) pod vlastní hmotností:
-// červený = ruční brzda se obsluhuje z plošiny, černý (kontrastní, tedy i bílý) = ze země.
+// Barva rámečku u síly zajišťovací brzdy (t) pod vlastní hmotností (předpis čl. 562, 528, 529):
+// červený = pořádací brzda, ovládaná ze země; černý (kontrastní, tedy i bílý) = ruční brzda, ovládaná z plošiny.
 // Měří se na dělicí čáře mezi řádkem s kg a řádkem s t, tedy uvnitř popisového pole –
 // vůz sám bývá natřený červeně, takže okolí rámečku o barvě nic neříká.
 
@@ -18,7 +18,7 @@ export function hull(lines) {
 }
 
 /**
- * kg a t: obálky řádků (souřadnice v plátně). Vrací { value: 'plosina' | 'zeme' | null, why }.
+ * kg a t: obálky řádků (souřadnice v plátně). Vrací { value: 'cerveny' | 'cerny' | null, why }.
  * null = nedá se rozhodnout (např. celé pole je červené a dělicí čára není vidět).
  */
 export function handBrakeFrame(canvas, kg, t) {
@@ -57,8 +57,8 @@ export function handBrakeFrame(canvas, kg, t) {
   if (reddish >= redRows.length * 0.8) {
     const mean = lumRows.reduce((a, b) => a + b, 0) / lumRows.length;
     const line = lumRows.some((l) => l < mean * 0.55 || l > mean * 1.35);
-    return line ? { value: 'zeme', why: 'nečervená čára na červeném poli' } : { value: null, why: 'celé pole je červené' };
+    return line ? { value: 'cerny', why: 'nečervená čára na červeném poli' } : { value: null, why: 'celé pole je červené' };
   }
-  if (lined >= 1) return { value: 'plosina', why: 'červená dělicí čára' };
-  return { value: 'zeme', why: 'dělicí čára není červená' };
+  if (lined >= 1) return { value: 'cerveny', why: 'červená dělicí čára' };
+  return { value: 'cerny', why: 'dělicí čára není červená' };
 }

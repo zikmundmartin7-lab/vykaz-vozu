@@ -10,7 +10,7 @@ import {
 import { db } from '../db.js';
 import { readText } from '../ocr.js';
 import { brakeModels, predictSwitch } from '../brake.js';
-import { HAND_BRAKE } from '../fields.js';
+import { HAND_BRAKE, HAND_BRAKE_MEANING } from '../fields.js';
 import { Topbar, Icon, Seg, NumField, NumberInput, PhotoButton, BlobImg, toast, go } from '../ui.js';
 
 const FIELD_NO = { axles: '47.', length_m: '48.', tare_kg: '50.', hand_bw_t: '', hand_force_kn: '53.', max_speed: '57.' };
@@ -227,9 +227,10 @@ export function EntryView({ report, entryId, save }) {
         <label class="field"><span>Revize (nápis REV)</span>
           <input class="input" value=${e.revision ?? ''} onInput=${(ev) => update({ revision: ev.target.value })} /></label>
         ${e.series_note && html`<p class="hint err">${e.series_note}</p>`}
-        <div class="field-title">Ruční brzda se obsluhuje (červený rámeček = z plošiny, černý = ze země)</div>
-        <${Seg} value=${e.hand_brake} options=${HAND_BRAKE}
+        <div class="field-title">Rámeček u síly zajišťovací brzdy (pod vlastní hmotností)</div>
+        <${Seg} value=${e.hand_brake} options=${HAND_BRAKE} bad=${['cerveny']}
           onChange=${(v) => update({ hand_brake: v, ...(v === 'nema' ? { rucni: 'nema' } : e.rucni === 'nema' ? { rucni: 'odbrzdena' } : {}) })} />
+        <div class="hint">${e.hand_brake ? html`→ <b>${HAND_BRAKE_MEANING[e.hand_brake]}</b>` : 'červený = pořádací brzda ze země · černý = ruční brzda z plošiny'}</div>
         <div class="field-title">51. Druh brzdových špalíků</div>
         <${Seg} value=${e.blocks} options=${BLOCKS.map(([v, l]) => [v, l])} onChange=${(v) => update({ blocks: e.blocks === v ? null : v })} />
         <div class="hint">${BLOCKS.find(([v]) => v === e.blocks)?.[2] ?? 'K, L, LL nekovové špalíky · D kotoučová brzda · F litinové špalíky'}</div>

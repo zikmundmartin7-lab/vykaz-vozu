@@ -12,7 +12,7 @@ import { Topbar, Icon, toast } from '../ui.js';
 const OPTIONS = {
   ...Object.fromEntries(Object.entries(SWITCHES).map(([k, s]) => [k, s.options])),
   ...Object.fromEntries(FIELDS.filter((f) => f.type === 'switch').map((f) => [f.key, f.options])),
-  hand_frame: HAND_BRAKE.filter(([v]) => v !== 'nema'),
+  hand_frame: HAND_BRAKE.filter(([v]) => v !== 'nema'),   // popisek = barva rámečku
 };
 const optionText = (kind, v) => OPTIONS[kind]?.find(([x]) => x === v)?.[1] ?? v;
 

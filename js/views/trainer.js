@@ -8,7 +8,7 @@ import { html, useEffect, useRef, useState } from '../../vendor/preact-htm.js';
 import { loadOcr, readText } from '../ocr.js';
 import { predictSwitch } from '../brake.js';
 import {
-  FIELDS, FIELD, HAND_T, HAND_BRAKE, extractField, extractHandT, valueFromLine, normalizeValue, isValidValue, displayValue, matchingLines,
+  FIELDS, FIELD, HAND_T, HAND_BRAKE, HAND_BRAKE_MEANING, extractField, extractHandT, valueFromLine, normalizeValue, isValidValue, displayValue, matchingLines,
 } from '../fields.js';
 import { db } from '../db.js';
 import { uid, formatNumber, isValidCheckDigit } from '../model.js';
@@ -132,7 +132,7 @@ export function Trainer({ onClose }) {
   const [input, setInput] = useState('');
   const [input2, setInput2] = useState('');          // síla zajišťovací brzdy (t) v kroku s hmotností
   const [cand2, setCand2] = useState(null);
-  const [frameColor, setFrameColor] = useState(null); // { value: plosina | zeme | null, why }
+  const [frameColor, setFrameColor] = useState(null); // { value: cerveny | cerny | null, why }
   const [info, setInfo] = useState(null);            // řada vozu podle čísla
   const [choice, setChoice] = useState(null);        // poloha přestavovače
   const [pred, setPred] = useState(null);
@@ -450,8 +450,8 @@ export function Trainer({ onClose }) {
   function summaryValue(f) {
     if (f.type !== 'weight') return values[f.key] ? displayValue(f, values[f.key]) : '—';
     if (!values.tare) return '—';
-    const hb = HAND_BRAKE.find(([v]) => v === values.hand_brake)?.[1]?.toLowerCase() ?? '';
-    return [displayValue(f, values.tare), values.hand_t && displayValue(HAND_T, values.hand_t), hb && `RB ${hb}`].filter(Boolean).join(' · ');
+    const hb = HAND_BRAKE_MEANING[values.hand_brake] ?? '';
+    return [displayValue(f, values.tare), values.hand_t && displayValue(HAND_T, values.hand_t), hb].filter(Boolean).join(' · ');
   }
 
   function weightPanel() {
@@ -464,8 +464,9 @@ export function Trainer({ onClose }) {
           <input class="input bigvalue" value=${input2} inputmode="decimal" placeholder="—" onFocus=${freeze}
             onInput=${(e) => { setTouched(true); setInput2(e.target.value); }} /></label>
       </div>
-      <div class="field-title">Ruční brzda se obsluhuje (červený rámeček = z plošiny, černý = ze země)</div>
-      <${Seg} value=${choice} options=${HAND_BRAKE} onChange=${(v) => { setChoice(v); setTouched(true); }} />
+      <div class="field-title">Rámeček u síly zajišťovací brzdy</div>
+      <${Seg} value=${choice} options=${HAND_BRAKE} bad=${['cerveny']} onChange=${(v) => { setChoice(v); setTouched(true); }} />
+      <div class="hint">${choice ? html`→ <b>${HAND_BRAKE_MEANING[choice]}</b>` : 'červený = pořádací brzda ze země · černý = ruční brzda z plošiny'}</div>
       <div class="hint">
         ${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand2 ? html` · <b>${displayValue(HAND_T, cand2.value)}</b>` : ''}${why ? ` · ${why}` : ''}`
           : 'Nic nenalezeno – přibližte se, nebo ťukněte na nápis.'}

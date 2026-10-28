@@ -4,8 +4,19 @@
 
 import { numberCandidates, digitsOnly, formatNumber, isCompleteNumber, BLOCKS } from './model.js';
 
-/** Kde se ruční (zajišťovací) brzda obsluhuje – podle barvy rámečku hodnoty v tunách pod vlastní hmotností. */
-export const HAND_BRAKE = [['plosina', 'Z plošiny'], ['zeme', 'Ze země'], ['nema', 'Nemá']];
+/**
+ * Barva rámečku hodnoty v tunách pod vlastní hmotností (ukládá se barva, ne význam).
+ * Předpis čl. 562: červený rámeček = brzdicí váha pořádací brzdy, černý = ruční brzdy;
+ * čl. 529: pořádací brzda se ovládá ručním kolem z boku vozu ze země, čl. 528: ruční (vřetenová) z plošiny.
+ */
+export const HAND_BRAKE = [['cerveny', 'Červený'], ['cerny', 'Černý'], ['nema', 'Nemá']];
+export const HAND_BRAKE_MEANING = {
+  cerveny: 'pořádací brzda, ovládaná ze země',
+  cerny: 'ruční brzda, ovládaná z plošiny',
+  nema: 'bez ruční brzdy',
+};
+/** Hodnoty z verze 10 (význam místo barvy, s obráceným výkladem): plošina byla červená, země černá. */
+export const HAND_BRAKE_OLD = { plosina: 'cerveny', zeme: 'cerny' };
 
 /** Síla zajišťovací brzdy (t) – snímá se v jednom kroku s hmotností (bývá ve stejném rámečku pod ní). */
 export const HAND_T = { key: 'hand_t', title: 'Síla zajišťovací brzdy', type: 'qty', unit: 't', wagonKey: 'hand_bw_t' };

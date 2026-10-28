@@ -62,5 +62,32 @@ export const db = {
   purgeSample: (id) => del('samples', id),
 };
 
+/**
+ * Verze 10 ukládala u ruční brzdy význam s obráceným výkladem barev (plosina = červený rámeček,
+ * zeme = černý). Od verze 11 se ukládá barva rámečku – převod je opakovatelný (mění jen staré hodnoty).
+ */
+export async function migrateHandBrake(old) {
+  const fix = (v) => old[v] ?? v;
+  for (const w of await all('wagons')) {
+    if (old[w.hand_brake]) await put('wagons', { ...w, hand_brake: fix(w.hand_brake) });
+  }
+  for (const s of await all('samples')) {
+    const changed = (s.kind === 'hand_frame' && old[s.label]) || old[s.extra?.hand_brake] || old[s.predicted?.hand_brake]
+      || (s.kind === 'hand_frame' && old[s.predicted?.label]);
+    if (!changed) continue;
+    await put('samples', {
+      ...s,
+      label: s.kind === 'hand_frame' ? fix(s.label) : s.label,
+      extra: s.extra ? { ...s.extra, hand_brake: fix(s.extra.hand_brake) } : s.extra,
+      predicted: s.predicted ? { ...s.predicted, ...(s.predicted.hand_brake ? { hand_brake: fix(s.predicted.hand_brake) } : {}),
+        ...(s.kind === 'hand_frame' && s.predicted.label ? { label: fix(s.predicted.label) } : {}) } : s.predicted,
+    });
+  }
+  for (const r of await all('reports')) {
+    if (!r.entries?.some((e) => old[e.hand_brake])) continue;
+    await put('reports', { ...r, entries: r.entries.map((e) => ({ ...e, hand_brake: fix(e.hand_brake) })) });
+  }
+}
+
 /** Požádá prohlížeč, aby data nemazal při nedostatku místa (hlavně kvůli fotkám pro trénink). */
 export const persist = () => navigator.storage?.persist?.().catch(() => false);
