@@ -213,12 +213,13 @@ button.chip { cursor: pointer; font-size: .95rem; padding: .35rem .7rem; }
 }
 .box.hit { border-color: #51cf66; border-width: 3px; background: rgba(81, 207, 102, .18); }
 .box.tap { border-color: #ffd43b; border-width: 3px; background: rgba(255, 212, 59, .2); }
+/* seznam sahá až dolů a položky se zmenší, aby se vešly všechny kroky i na nízký displej */
 .steplist {
-  position: absolute; right: 8px; top: calc(max(.5rem, env(safe-area-inset-top)) + 52px); bottom: 118px;
+  position: absolute; right: 8px; top: calc(max(.5rem, env(safe-area-inset-top)) + 52px); bottom: 8px;
   display: flex; flex-direction: column; gap: 3px; width: 138px; overflow: hidden;
 }
 .stepitem {
-  flex: none; height: 30px; display: flex; align-items: center; gap: .3rem; padding: 0 .3rem 0 .6rem;
+  flex: 0 1 32px; min-height: 18px; display: flex; align-items: center; gap: .3rem; padding: 0 .3rem 0 .6rem;
   border: 0; border-radius: 9px; background: rgba(0, 0, 0, .55); color: #fff; cursor: pointer;
   font-size: .8rem; font-weight: 600; text-align: left; touch-action: none; user-select: none; -webkit-user-select: none;
 }
@@ -229,11 +230,11 @@ button.chip { cursor: pointer; font-size: .95rem; padding: .35rem .7rem; }
 .stepitem.on { background: #fff; color: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
 .stepitem.dragging { outline: 2px solid #ffd43b; transform: scale(1.05); }
 .ask {
-  position: absolute; left: 0; right: 0; bottom: 0; padding: 1.6rem 1rem .6rem; pointer-events: none; min-height: 110px;
+  position: absolute; left: 0; right: 150px; bottom: 0; padding: 1.6rem .6rem .6rem 1rem; pointer-events: none;
   background: linear-gradient(transparent, rgba(0, 0, 0, .75));
 }
 .ask-n { font-size: .8rem; opacity: .8; }
-.ask-title { font-size: 1.45rem; font-weight: 800; line-height: 1.2; }
+.ask-title { font-size: 1.3rem; font-weight: 800; line-height: 1.2; }
 .ask-hint { font-size: .9rem; opacity: .9; }
 .input.bigvalue { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .summary { list-style: none; margin: 0; padding: 0; font-size: .92rem; }
