@@ -147,7 +147,7 @@ export const WAGON_FIELDS = [
   ['hand_force_kn', 'Zajišťovací síla', 'kN'],
   ['max_speed', 'Nejv. dovolená rychlost', 'km/h'],
 ];
-const STATIC_KEYS = [...WAGON_FIELDS.map(([k]) => k), 'blocks', 'revision'];
+const STATIC_KEYS = [...WAGON_FIELDS.map(([k]) => k), 'blocks', 'revision', 'hand_brake', 'series'];
 
 /**
  * Nový vůz ve výkazu: údaje z nápisů z paměti (wagon), polohy přestavovačů a stanice určení
@@ -160,7 +160,7 @@ export function newEntry(number, wagon, prev, toStation = '') {
     rezim: prev?.rezim ?? 'P',
     naklad: prev?.naklad ?? 'prazdny',
     kohout: 'zapnuta',
-    rucni: 'odbrzdena',
+    rucni: wagon?.hand_brake === 'nema' ? 'nema' : 'odbrzdena',
     hand_checked: false,
     ...Object.fromEntries(STATIC_KEYS.map((k) => [k, wagon?.[k] ?? null])),
     bw: { ...(wagon?.bw ?? {}) },

@@ -4,17 +4,25 @@
 
 import { numberCandidates, digitsOnly, formatNumber, isCompleteNumber, BLOCKS } from './model.js';
 
+/** Kde se ruční (zajišťovací) brzda obsluhuje – podle barvy rámečku hodnoty v tunách pod vlastní hmotností. */
+export const HAND_BRAKE = [['plosina', 'Z plošiny'], ['zeme', 'Ze země'], ['nema', 'Nemá']];
+
+/** Síla zajišťovací brzdy (t) – snímá se v jednom kroku s hmotností (bývá ve stejném rámečku pod ní). */
+export const HAND_T = { key: 'hand_t', title: 'Síla zajišťovací brzdy', type: 'qty', unit: 't', wagonKey: 'hand_bw_t' };
+
 /**
- * Kroky tréninku ve výchozím pořadí obchůzky (vozmistr si ho může přetažením změnit, viz trainer.js). type: number = číslo vozu, qty = číslo s jednotkou,
- * switch = volba tlačítkem (přestavovače, nápravy, špalíky), text = volný text.
- * wagonKey = kam se hodnota uloží k vozu (numeric = jako číslo), default = předvolená volba.
+ * Kroky tréninku ve výchozím pořadí obchůzky (vozmistr si ho může přetažením změnit, viz trainer.js).
+ * type: number = číslo vozu, qty = číslo s jednotkou, switch = volba tlačítkem (přestavovače, nápravy, špalíky),
+ * text = volný text, weight = hmotnost + ruční brzda z jednoho rámečku.
+ * wagonKey = kam se hodnota uloží k vozu (numeric = jako číslo), default = předvolená volba,
+ * manual = u volby jde zadat i jiné číslo.
  */
 export const FIELDS = [
   { key: 'cislo', title: 'Číslo vozu', short: 'Číslo vozu', hint: '12místné číslo na boku vozu', type: 'number' },
   { key: 'axles', title: 'Počet náprav', short: 'Nápravy', hint: 'spočítejte nápravy (dvojkolí) vozu', type: 'switch',
-    options: [['2', '2'], ['3', '3'], ['4', '4'], ['6', '6'], ['8', '8']], default: '4', wagonKey: 'axles', numeric: true },
-  { key: 'tare', title: 'Hmotnost vozu', short: 'Hmotnost', hint: 'vlastní hmotnost (tara), např. 23 500 kg', type: 'qty', unit: 'kg', wagonKey: 'tare_kg' },
-  { key: 'hand_t', title: 'Síla zajišťovací brzdy', short: 'Zaj. brzda (t)', hint: 'brzdicí váha ruční brzdy v tunách, např. 20 t', type: 'qty', unit: 't', wagonKey: 'hand_bw_t' },
+    options: [['2', '2'], ['3', '3'], ['4', '4'], ['6', '6'], ['8', '8']], wagonKey: 'axles', numeric: true, manual: true },
+  { key: 'tare', title: 'Hmotnost a ruční brzda', short: 'Hmotnost + RB', type: 'weight', unit: 'kg', wagonKey: 'tare_kg',
+    hint: 'rámeček s vlastní hmotností (kg) a pod ní síla zajišťovací brzdy (t)' },
   { key: 'hand_kn', title: 'Zajišťovací síla', short: 'Zaj. síla (kN)', hint: 'v kN, např. 20,2 kN', type: 'qty', unit: 'kN', wagonKey: 'hand_force_kn' },
   { key: 'length', title: 'Délka přes nárazníky', short: 'Délka', hint: 'v metrech, např. 15,74 m', type: 'qty', unit: 'm', wagonKey: 'length_m' },
   { key: 'speed', title: 'Nejvyšší dovolená rychlost', short: 'Rychlost', hint: 'v km/h, např. 100 nebo 120 (S / SS v tabulce zatížení)',
@@ -26,7 +34,7 @@ export const FIELDS = [
     options: [['prazdny', 'Prázdný'], ['lozeny', 'Ložený'], ['auto', 'Samočinný']], default: 'prazdny' },
   { key: 'revize', title: 'Revize', short: 'Revize', hint: 'nápis REV s dílnou a datem', type: 'text', wagonKey: 'revision' },
 ];
-export const FIELD = Object.fromEntries(FIELDS.map((f) => [f.key, f]));
+export const FIELD = Object.fromEntries([...FIELDS, HAND_T].map((f) => [f.key, f]));
 
 // Číslo s jednotkou: „23 500 kg“, „23.500 kg“, „20,0t“, „20,2 kN“, „15,74 m“, „100 km/h“.
 const QTY = /(\d{1,3}(?:[ .]\d{3})+|\d+)(?:[,.](\d{1,2}))?\s?(kg|kn|km\/h|t|m)(?![a-z])/gi;
@@ -101,7 +109,7 @@ export function extractField(field, lines) {
     const c = numberCandidates(lines).find((x) => x.valid);
     return c ? { value: c.number, lines: c.lines, sure: c.sure } : null;
   }
-  if (field.type === 'qty') {
+  if (field.type === 'qty' || field.type === 'weight') {
     let best = null;
     for (const q of quantities(lines)) {
       const score = RULES[field.key](q);
@@ -140,11 +148,32 @@ export function extractField(field, lines) {
   return null;
 }
 
+/**
+ * Síla zajišťovací brzdy (t): v rámečku s hmotností je přímo pod ní (překrývá se vodorovně a leží
+ * do dvou výšek řádku níž). Když tam není, nejlepší „t“ podle obecného pravidla. Vrací jako extractField.
+ */
+export function extractHandT(lines, tare) {
+  const qs = quantities(lines).filter((q) => q.unit === 't' && q.v >= 3 && q.v <= 60);
+  const top = tare?.lines?.map((i) => lines[i]).filter(Boolean) ?? [];
+  if (top.length) {
+    const x0 = Math.min(...top.map((l) => l.x));
+    const x1 = Math.max(...top.map((l) => l.x + l.w));
+    const y1 = Math.max(...top.map((l) => l.y + l.h));
+    const h = Math.max(...top.map((l) => l.h));
+    const below = qs.find((q) => q.li.some((i) => {
+      const l = lines[i];
+      return l.y >= y1 - h * 0.6 && l.y <= y1 + h * 1.5 && Math.min(x1, l.x + l.w) - Math.max(x0, l.x) > 0;
+    }));
+    if (below) return { value: String(below.v), lines: below.li, below: true };
+  }
+  return extractField(HAND_T, lines);
+}
+
 /** Hodnota z řádku i, na který vozmistr ťukl (u čísla s jednotkou i se sousedním rámečkem, např. „23 500“ + „kg“). */
 export function valueFromLine(field, lines, i) {
   const line = lines[i];
   if (field.type === 'number') return digitsOnly(line.text).slice(0, 12);
-  if (field.type === 'qty') {
+  if (field.type === 'qty' || field.type === 'weight') {
     const q = quantities(lines).find((x) => x.li.includes(i));
     const v = q ? inUnit(q, field.unit) : null;
     if (v !== null) return String(v);
@@ -158,7 +187,7 @@ export function valueFromLine(field, lines, i) {
 export function normalizeValue(field, text) {
   const t = String(text ?? '').trim();
   if (field.type === 'number') return digitsOnly(t);
-  if (field.type === 'qty') {
+  if (field.type === 'qty' || field.type === 'weight') {
     const v = Number(t.replace(/\s/g, '').replace(',', '.'));
     return t && Number.isFinite(v) ? String(v) : '';
   }
@@ -174,7 +203,7 @@ export function isValidValue(field, value) {
 export function displayValue(field, value) {
   if (!value) return '';
   if (field.type === 'number') return formatNumber(value);
-  if (field.type === 'qty') return `${Number(value).toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} ${field.unit}`;
+  if (field.type === 'qty' || field.type === 'weight') return `${Number(value).toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} ${field.unit}`;
   if (field.key === 'axles') return `${value} náprav${Number(value) <= 4 ? 'y' : ''}`;
   if (field.type === 'switch') return field.options.find(([v]) => v === value)?.[1] ?? value;
   return value;
@@ -186,7 +215,7 @@ export function matchingLines(field, lines, value) {
   if (field.type === 'number') {
     return lines.map((l, i) => [digitsOnly(l.text), i]).filter(([d]) => d.length >= 2 && value.includes(d)).map(([, i]) => i);
   }
-  if (field.type === 'qty') {
+  if (field.type === 'qty' || field.type === 'weight') {
     return quantities(lines).filter((q) => Math.abs((inUnit(q, field.unit) ?? NaN) - Number(value)) < 1e-6).flatMap((q) => q.li);
   }
   return lines.map((l, i) => [l, i]).filter(([l]) => l.text.length > 2 && value.includes(l.text.trim())).map(([, i]) => i);

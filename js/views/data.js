@@ -2,7 +2,7 @@
 
 import { html, useEffect, useState } from '../../vendor/preact-htm.js';
 import { SWITCHES, plural } from '../model.js';
-import { FIELDS } from '../fields.js';
+import { FIELDS, HAND_BRAKE } from '../fields.js';
 import { db } from '../db.js';
 import { brakeModels } from '../brake.js';
 import { zip, download } from '../xlsx.js';
@@ -12,12 +12,15 @@ import { Topbar, Icon, toast } from '../ui.js';
 const OPTIONS = {
   ...Object.fromEntries(Object.entries(SWITCHES).map(([k, s]) => [k, s.options])),
   ...Object.fromEntries(FIELDS.filter((f) => f.type === 'switch').map((f) => [f.key, f.options])),
+  hand_frame: HAND_BRAKE.filter(([v]) => v !== 'nema'),
 };
 const optionText = (kind, v) => OPTIONS[kind]?.find(([x]) => x === v)?.[1] ?? v;
 
 const KINDS = {
   ...Object.fromEntries(FIELDS.map((f) => [f.key, f.title])),
   ...Object.fromEntries(Object.entries(SWITCHES).map(([k, s]) => [k, s.title])),
+  hand_frame: 'Rámeček síly zajišťovací brzdy (výřez)',
+  hand_t: 'Síla zajišťovací brzdy (dřívější samostatný krok)',
   napis: 'Nápisy na voze (karta vozu)',
   rid: 'Tabulky RID',
 };
@@ -30,16 +33,18 @@ const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 // a označeným nápisem (match = indexy řádků). labels.csv shrnuje vše.
 async function buildZip(samples) {
   const files = [];
-  const csv = [['soubor', 'druh', 'hodnota', 'vuz', 'porizeno', 'zdroj', 'odhad', 'jistota'].join(';')];
+  const csv = [['soubor', 'druh', 'hodnota', 'vuz', 'porizeno', 'zdroj', 'odhad', 'jistota', 'dalsi'].join(';')];
   for (const s of samples) {
     const dir = OPTIONS[s.kind] ? `${s.kind}/${s.label}` : s.kind;
     const name = `${dir}/${s.id}.jpg`;
     files.push({ name, data: new Uint8Array(await s.blob.arrayBuffer()) });
     if (s.ocr) {
-      const meta = { kind: s.kind, label: s.label, wagon: s.wagon, predicted: s.predicted, match: s.match, ocr: s.ocr };
+      const meta = { kind: s.kind, label: s.label, extra: s.extra, wagon: s.wagon, predicted: s.predicted,
+        match: s.match, match_extra: s.match_extra, ocr: s.ocr };
       files.push({ name: `${dir}/${s.id}.json`, data: enc.encode(JSON.stringify(meta)) });
     }
-    csv.push([name, s.kind, s.label, s.wagon, s.created_at, s.source ?? 'karta', s.predicted?.label, s.predicted?.prob?.toFixed(3)]
+    csv.push([name, s.kind, s.label, s.wagon, s.created_at, s.source ?? 'karta', s.predicted?.label, s.predicted?.prob?.toFixed(3),
+      s.extra ? JSON.stringify(s.extra) : '']
       .map(csvCell).join(';'));
   }
   files.push({ name: 'labels.csv', data: enc.encode(`\ufeff${csv.join('\n')}\n`) });

@@ -11,6 +11,7 @@ import { html, render, useEffect, useState } from '../vendor/preact-htm.js';
 import { db, persist } from './db.js';
 import { loadOcr } from './ocr.js';
 import { newEntry, uid } from './model.js';
+import { seriesInfo } from './series.js';
 import { Toasts, go } from './ui.js';
 import { HomeView } from './views/home.js';
 import { ReportView } from './views/report.js';
@@ -64,6 +65,13 @@ function App() {
       if (existing) return go(`#/vykaz/${report.id}/vuz/${existing.id}`, true);
       const prev = report.entries.at(-1);
       const entry = newEntry(number, await db.wagon(number), prev, report.to_station);
+      const info = await seriesInfo(number);
+      if (info) {
+        entry.series ??= info.series;
+        if (entry.axles == null && info.axles.sure) entry.axles = info.axles.value;
+        if (entry.max_speed == null && info.speed) entry.max_speed = info.speed;
+        entry.series_note = info.axles.sure ? null : `Podle řady ${info.series}: ${info.axles.note ?? 'počet náprav nejde určit'} – zadejte ručně.`;
+      }
       if (blob) {
         const s = { id: uid(), kind: 'cislo', label: number, blob, wagon: number, created_at: new Date().toISOString() };
         await db.addSample(s);

@@ -13,15 +13,21 @@ Aplikace pro vozmistry: kamerou telefonu přečte číslo železničního vozu, 
 
 Vše se ukládá jen v telefonu (v prohlížeči). Ven se data dostanou exportem.
 
+## Řada vozu z čísla
+
+Zdroje: [OTIF UTP Marking 2021](https://otif.org/fileadmin/new/3-Reference-Text/3D-Technical-Interoperability/3D1-Prescriptions-and-other-rules/UTP-MARKING-2021_e%20In-force.pdf) (kap. 11 – 1. číslice: 0, 2, 4 = vůz s nápravami, 1, 3, 8 = s podvozky; kap. 14 – číslice 5–8; definice písmen řady), [ERA – Assignment of EVN, Appendix 6 Part 9 a 12](https://www.era.europa.eu/domains/registers/evr_en). Tabulka ERA se občas doplňuje – při aktualizaci stáhnout nový `appendix_6_p9_en.xls` a spustit `tools/era_rady.py`.
+
 ## Snímání pro trénink
 
 Úvodní obrazovka → **Snímat pro trénink**. Vozmistr obchází vůz s kamerou a aplikace ho vede po údajích. Výchozí pořadí:
 
-1. číslo vozu, 2. počet náprav, 3. hmotnost vozu, 4. síla zajišťovací brzdy (t), 5. zajišťovací síla (kN), 6. délka přes nárazníky, 7. nejvyšší dovolená rychlost, 8. druh brzdových špalíků, 9. přestavovač G/P, 10. přestavovač prázdný/ložený, 11. revize.
+1. číslo vozu, 2. počet náprav, 3. hmotnost a ruční brzda (vlastní hmotnost v kg, pod ní síla zajišťovací brzdy v t a odkud se brzda obsluhuje), 4. zajišťovací síla (kN), 5. délka přes nárazníky, 6. nejvyšší dovolená rychlost, 7. druh brzdových špalíků, 8. přestavovač G/P, 9. přestavovač prázdný/ložený, 10. revize.
 
 - Kamera čte text v celém záběru a kolem přečtených nápisů kreslí rámečky. Zeleně je nápis, který aplikace považuje za hledaný údaj, a jeho hodnota je předvyplněná dole.
 - **Potvrdit** = hodnota sedí. Když nesedí, hodnotu přepište, nebo ťukněte na správný nápis v obraze (zežloutne). Ťuknutím nebo psaním se obraz zastaví, aby se uložil přesně ten snímek; **Zpět ke kameře** ho pustí dál.
 - **Světlo** (vpravo nahoře, i ve skeneru čísla vozu): žárovka zapne a vypne svítilnu, sluníčko ukáže posuvník **Jas** (−2 až +2, pamatuje se). Sílu světla svítilny webová aplikace nastavit neumí – iPhone ani Android to webu nedovolí, jen zapnout a vypnout. Jas proto mění obraz: kde to kamera umí (část Androidů), korekcí expozice (ztmavení pomůže proti odleskům reflexních nápisů), jinak softwarově – stejně se upraví i snímek, který se čte a ukládá.
+- **Řada podle čísla:** z 5.–8. číslice se podle tabulek ERA určí řada vozu (např. Shimmns) a z ní počet náprav a nejvyšší rychlost (s = 100 km/h, ss = 120 km/h). Jistý počet náprav se předvyplní; u 8 náprav, nejistého „6 a více“ a kloubových vozů aplikace jen poradí a počet se zvolí ručně (i „Jiný počet“).
+- **Hmotnost a ruční brzda v jednom kroku:** aplikace přečte vlastní hmotnost, pod ní sílu zajišťovací brzdy (t) a podle barvy dělicí čáry mezi nimi navrhne, odkud se ruční brzda obsluhuje – **červený rámeček = z plošiny, černý (kontrastní, i bílý) = ze země**. Bez údaje v tunách navrhne „Nemá“. Barva se měří uvnitř popisového pole, protože vůz sám bývá červený. Výřez rámečku se ukládá zvlášť pro budoucí síť na barvu.
 - **Na voze není** = údaj na voze chybí, krok se přeskočí. **Fotka** pořídí snímek fotoaparátem (ostřejší než živý obraz).
 - Počet náprav, druh špalíků a přestavovače se volí tlačítkem; snímek pro trénink se uloží sám při **Potvrdit** – přesně to, co je v tu chvíli na displeji (zvláštní fotka není potřeba) (nápravy předvolené na 4, u špalíků aplikace nabídne LL/K/L, když je na snímku samostatný nápis).
 - Na konci se ukáže souhrn a **Uložit a další vůz** uloží údaje k číslu vozu (příště se ve výkazu vyplní samy).
@@ -61,6 +67,8 @@ js/ocr.js, js/ort.js                      čtení textu sítěmi PaddleOCR přes
 js/brake.js                               odhad polohy přestavovače vlastní sítí (models/brzdy.json)
 js/fields.js                              údaje snímané při obchůzce a pravidla, jak je najít v textu
 js/light.js                               svítilna a jas obrazu kamery
+js/series.js, data/rady.json              řada vozu z čísla (tabulky ERA), počet náprav a rychlost
+js/frame.js                               barva rámečku síly zajišťovací brzdy (z plošiny / ze země)
 js/db.js                                  úložiště v telefonu (IndexedDB)
 js/xlsx.js                                zápis Excelu a ZIPu bez knihoven
 js/views/*.js                             obrazovky: výkazy, výkaz, skener, vůz, výstup, data, trénink (trainer.js)
@@ -68,4 +76,5 @@ models/                                   sítě PP-OCRv5 mobile (det.onnx, rec.
 vendor/                                   Preact + htm, onnxruntime-web 1.20.1
 training/trenink_prestavovacu.ipynb       trénink sítí na přestavovače v Colabu
 tools/ikony.py                            ikony aplikace
+tools/era_rady.py                         převod tabulky ERA appendix_6_p9_en.xls na data/rady.json
 ```

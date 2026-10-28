@@ -10,6 +10,7 @@ import {
 import { db } from '../db.js';
 import { readText } from '../ocr.js';
 import { brakeModels, predictSwitch } from '../brake.js';
+import { HAND_BRAKE } from '../fields.js';
 import { Topbar, Icon, Seg, NumField, NumberInput, PhotoButton, BlobImg, toast, go } from '../ui.js';
 
 const FIELD_NO = { axles: '47.', length_m: '48.', tare_kg: '50.', hand_bw_t: '', hand_force_kn: '53.', max_speed: '57.' };
@@ -181,7 +182,8 @@ export function EntryView({ report, entryId, save }) {
           ? html`<${NumberInput} value=${e.number} onChange=${(n) => update({ number: n })} autoFocus />
               <button class="btn small" onClick=${() => setEditNumber(false)}>Hotovo</button>`
           : html`<div class="row">
-              <div style="font-size:1.35rem;font-weight:700"><span class="number">${formatNumber(e.number)}</span></div>
+              <div><div style="font-size:1.35rem;font-weight:700"><span class="number">${formatNumber(e.number)}</span></div>
+                ${e.series && html`<div class="small muted">Řada ${e.series} (podle čísla)</div>`}</div>
               <span class="spacer"></span>
               <button class="linkbtn" onClick=${() => setEditNumber(true)}>Opravit</button>
             </div>`}
@@ -224,6 +226,10 @@ export function EntryView({ report, entryId, save }) {
         </div>
         <label class="field"><span>Revize (nápis REV)</span>
           <input class="input" value=${e.revision ?? ''} onInput=${(ev) => update({ revision: ev.target.value })} /></label>
+        ${e.series_note && html`<p class="hint err">${e.series_note}</p>`}
+        <div class="field-title">Ruční brzda se obsluhuje (červený rámeček = z plošiny, černý = ze země)</div>
+        <${Seg} value=${e.hand_brake} options=${HAND_BRAKE}
+          onChange=${(v) => update({ hand_brake: v, ...(v === 'nema' ? { rucni: 'nema' } : e.rucni === 'nema' ? { rucni: 'odbrzdena' } : {}) })} />
         <div class="field-title">51. Druh brzdových špalíků</div>
         <${Seg} value=${e.blocks} options=${BLOCKS.map(([v, l]) => [v, l])} onChange=${(v) => update({ blocks: e.blocks === v ? null : v })} />
         <div class="hint">${BLOCKS.find(([v]) => v === e.blocks)?.[2] ?? 'K, L, LL nekovové špalíky · D kotoučová brzda · F litinové špalíky'}</div>
