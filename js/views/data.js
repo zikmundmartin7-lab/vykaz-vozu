@@ -66,19 +66,19 @@ export function DataView() {
     if (OPTIONS[s.kind]) g.labels[s.label] = (g.labels[s.label] ?? 0) + 1;
   }
 
-  async function exportZip(list) {
+  // how = 'share' (nabídka sdílení telefonu) nebo 'download' (stažení souboru, v iPhonu do Souborů → Stažené)
+  async function exportZip(list, how = 'share') {
     setBusy(true);
     try {
       const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
       const file = new File([await buildZip(list)], `vykaz_data_${stamp}.zip`, { type: 'application/zip' });
-      let shared = false;
-      if (navigator.canShare?.({ files: [file] })) {
-        try { await navigator.share({ files: [file], title: file.name }); shared = true; } catch (e) { if (e.name === 'AbortError') { setBusy(false); return; } }
-      }
-      if (!shared) download(file, file.name);
+      if (how === 'share' && navigator.canShare?.({ files: [file] })) {
+        // jen soubor, bez názvu a textu: aplikace Disk v iPhonu jinak uloží místo ZIPu jen text s názvem
+        try { await navigator.share({ files: [file] }); } catch (e) { if (e.name === 'AbortError') { setBusy(false); return; } throw e; }
+      } else download(file, file.name);
       const now = new Date().toISOString();
       for (const s of list) if (!s.exported_at) await db.updateSample({ ...s, exported_at: now });
-      toast(`Vyexportováno ${plural(list.length, 'fotka', 'fotky', 'fotek')}.`);
+      toast(`Vyexportováno ${plural(list.length, 'fotka', 'fotky', 'fotek')} (${(file.size / 1048576).toLocaleString('cs-CZ', { maximumFractionDigits: 1 })} MB).`);
       await load();
     } catch (e) {
       toast(`Export se nepovedl: ${e.message}`);
@@ -142,7 +142,10 @@ export function DataView() {
             <${Icon} name="share" /> ${busy ? 'Připravuji…' : 'Exportovat nové'}</button>
           <button class="btn" disabled=${busy || !samples.length} onClick=${() => exportZip(samples)}>Exportovat vše</button>
         </div>
-        <p class="hint">ZIP uložte na Google Disk do složky <b>Vykaz_vozu_data</b> a spusťte sešit <b>trenink_prestavovacu.ipynb</b> v Colabu.</p>
+        <p class="hint">V nabídce sdílení zvolte <b>Disk</b> a složku <b>Vykaz_vozu_data</b> (nebo <b>Uložit do Souborů</b>).
+          Na Disku musí být soubor <b>.zip</b> o velikosti v MB – ne text s názvem.</p>
+        <button class="linkbtn small" disabled=${busy || !samples.length} onClick=${() => exportZip(samples, 'download')}>
+          <${Icon} name="download" size=${16} /> Stáhnout všechno jako ZIP do telefonu</button>
         <div class="row" style="margin-top:.4rem">
           <button class="linkbtn small danger"
             onClick=${() => toTrash(samples.filter((s) => s.exported_at), `Přesunout ${fotek(samples.filter((s) => s.exported_at).length)} (už vyexportované) do koše?`)}>

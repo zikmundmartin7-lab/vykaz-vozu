@@ -34,8 +34,8 @@ Každé potvrzení uloží snímek, potvrzenou hodnotu, všechen přečtený tex
 
 ## Trénink sítě na přestavovače
 
-1. V aplikaci **Data pro trénink → Exportovat nové**, ZIP uložit na Google Disk do složky `Vykaz_vozu_data`.
-2. Otevřít `training/trenink_prestavovacu.ipynb` v Google Colabu, zapnout GPU (Runtime → Change runtime type → T4 GPU) a **Run all**.
+1. V aplikaci **Data pro trénink → Exportovat nové**, v nabídce sdílení **Disk** → složka `Vykaz_vozu_data` (na Disku musí být `.zip` v MB, ne text s názvem). Jinak **Stáhnout všechno jako ZIP do telefonu** a nahrát ručně.
+2. Otevřít sešit (kopie na Disku: `Colab_Notebooks/Vykaz_vozu/trenink_prestavovacu.ipynb`, zdroj `training/`) v Google Colabu, zapnout GPU (Runtime → Change runtime type → T4 GPU) a **Run all**.
 3. Ze složky `Vykaz_vozu_modely` na Disku zkopírovat `brzdy.json` a nové soubory `.onnx` do složky `models/` aplikace a vydat novou verzi.
 
 Síť se natrénuje pro přestavovač, který má aspoň dvě polohy s 8 a více fotkami. Na začátek stačí desítky fotek od každé polohy, spolehlivá síť chce stovky – z různých vozů, za dne i v noci. Sešit vypíše chybně poznané fotky, často odhalí špatně zadanou polohu.
