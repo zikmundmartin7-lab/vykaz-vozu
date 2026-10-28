@@ -5,10 +5,11 @@
 // a označený nápis jako trénovací příklad; po posledním kroku se údaje uloží k vozu.
 
 import { html, useEffect, useRef, useState } from '../../vendor/preact-htm.js';
-import { loadOcr, readText } from '../ocr.js';
+import { loadOcr, readText, readLine } from '../ocr.js';
 import { predictSwitch } from '../brake.js';
 import {
-  FIELDS, FIELD, HAND_T, HAND_BRAKE, HAND_BRAKE_MEANING, extractField, extractHandT, valueFromLine, normalizeValue, isValidValue, displayValue, matchingLines,
+  FIELDS, FIELD, HAND_T, HAND_BRAKE, HAND_BRAKE_MEANING, extractField, parseRevision, formatRevision,
+  parseRevDate, revisionStatus, formatDay, readRevisionYears, extractHandT, valueFromLine, normalizeValue, isValidValue, displayValue, matchingLines,
 } from '../fields.js';
 import { db } from '../db.js';
 import { uid, formatNumber, isValidCheckDigit } from '../model.js';
@@ -162,6 +163,7 @@ export function Trainer({ onClose }) {
   const [cand, setCand] = useState(null);
   const [input, setInput] = useState('');
   const [input2, setInput2] = useState('');          // síla zajišťovací brzdy (t) v kroku s hmotností
+  const [rev, setRev] = useState({ years: '', date: '', ext: '' }); // revize: roky, datum, prodloužení (měsíce)
   const [cand2, setCand2] = useState(null);
   const [frameColor, setFrameColor] = useState(null); // { value: cerveny | jiny | null, why }
   const [info, setInfo] = useState(null);            // řada vozu podle čísla
@@ -282,6 +284,14 @@ export function Trainer({ onClose }) {
         if (handT) setInput2(editable(HAND_T, handT));
         if (frameValue) setChoice(frameValue);
       }
+    } else if (f.type === 'revision') {
+      const found = await readRevisionYears(extractField(f, lines), canvas, readLine);
+      const best = pick(v.main, found?.value);
+      setCand(found ? { ...found, stable: best === found.value } : null);
+      if (best && !keep()) {
+        const r = parseRevision(best);
+        setRev({ years: r.years ? String(r.years) : '', date: r.date, ext: r.ext ? String(r.ext) : '' });
+      }
     } else {
       // rychlost, kterou z nápisů nejde přečíst, se navrhne podle řady (s = 100 km/h, ss = 120 km/h)
       const seriesSpeed = f.key === 'speed' && live.current.info?.speed;
@@ -309,6 +319,10 @@ export function Trainer({ onClose }) {
     setTouched(prev !== undefined && prev !== null);
     if (f?.type === 'switch') setChoice(prev ?? f.default ?? null);
     if (f?.type === 'weight') setChoice(vals.hand_brake ?? null);
+    if (f?.type === 'revision') {
+      const r = prev ? parseRevision(prev) : null;
+      setRev({ years: r?.years ? String(r.years) : '', date: r?.date ?? '', ext: r?.ext ? String(r.ext) : '' });
+    }
   }
 
   // další nevyplněný krok v pořadí za tím současným (pak od začátku); vše vyplněné → souhrn
@@ -333,6 +347,13 @@ export function Trainer({ onClose }) {
     setTapped(i);
     setTouched(true);
     const text = frame.lines[i].text;
+    if (field.type === 'revision') {
+      const date = text.match(/\d{1,2}\s?\.\s?\d{1,2}\s?\.\s?\d{2,4}/)?.[0];
+      const ext = text.match(/\+\s*(\d{1,2})\s*M/i)?.[1];
+      const years = text.trim().match(/^(\d{1,2})\s*[JjLlRr]?$/)?.[1];
+      setRev((r) => ({ ...r, ...(date ? { date: date.replace(/\s/g, '') } : {}), ...(ext ? { ext } : {}), ...(years && !date ? { years } : {}) }));
+      return;
+    }
     if (field.type === 'weight' && !/kg/i.test(text) && /\d\s*[.,]?\s*[0oO]?\s*t\b/i.test(text)) {
       setInput2(editable(HAND_T, valueFromLine(HAND_T, frame.lines, i)));
     } else setInput(editable(field, valueFromLine(field, frame.lines, i)));
@@ -363,6 +384,7 @@ export function Trainer({ onClose }) {
 
   async function confirmStep() {
     if (field.type === 'weight') return confirmWeight();
+    if (field.type === 'revision') return confirmRevision();
     const value = field.type === 'switch' ? choice : normalizeValue(field, input);
     if (!isValidValue(field, value)) {
       toast(field.type === 'number' ? 'Číslo vozu musí mít 12 číslic.' : 'Zadejte hodnotu, nebo zvolte „Na voze není“.');
@@ -447,6 +469,34 @@ export function Trainer({ onClose }) {
     goTo(nextKey(next), next);
   }
 
+  // Revize: roky z 1. rámečku, datum z posledního, případné prodloužení „+N M“; prošlou revizi hned ohlásit.
+  async function confirmRevision() {
+    const r = { years: Number(rev.years) || null, date: rev.date.replace(/\s/g, ''), ext: Number(rev.ext) || 0 };
+    if (!parseRevDate(r.date)) return toast('Zadejte datum revize z posledního rámečku (např. 13.03.24).');
+    if (!r.years) return toast('Doplňte počet let z prvního rámečku.');
+    const value = formatRevision(r);
+    if (frame) {
+      const small = shrink(frame);
+      const blob = await new Promise((res) => small.canvas.toBlob(res, 'image/jpeg', 0.82));
+      await db.addSample({
+        id: uid(), kind: field.key, label: value, blob, wagon: values.cislo ?? '',
+        created_at: new Date().toISOString(), source: 'trenink',
+        predicted: cand ? { label: cand.value } : null,
+        ocr: ocrRecord(small),
+        match: tapped !== null ? [tapped] : cand?.lines ?? [],
+      });
+      setSaved((n) => n + 1);
+    }
+    const st = revisionStatus(r);
+    if (st.expired) {
+      vibrate(400);
+      toast(`Pozor: revize je prošlá – platila do ${formatDay(st.until)}.`);
+    } else vibrate(50);
+    const next = { ...values, revize: value };
+    setValues(next);
+    goTo(nextKey(next), next);
+  }
+
   // Který nápis je potvrzený údaj: ten, na který vozmistr ťukl, jinak řádky se stejnou hodnotou;
   // u revize (opravený text se s přečteným nemusí shodovat) řádek s nápisem REV.
   function matchedLines(value) {
@@ -496,10 +546,36 @@ export function Trainer({ onClose }) {
   }
 
   function summaryValue(f) {
+    if (f.type === 'revision' && values[f.key]) {
+      const text = displayValue(f, values[f.key]);
+      return revisionStatus(values[f.key]).expired ? html`<span class="err">⚠ ${text}</span>` : text;
+    }
     if (f.type !== 'weight') return values[f.key] ? displayValue(f, values[f.key]) : '—';
     if (!values.tare) return '—';
     const hb = HAND_BRAKE_MEANING[values.hand_brake] ?? '';
     return [displayValue(f, values.tare), values.hand_t && displayValue(HAND_T, values.hand_t), hb].filter(Boolean).join(' · ');
+  }
+
+  function revisionPanel() {
+    const r = { years: Number(rev.years) || null, date: rev.date, ext: Number(rev.ext) || 0 };
+    const st = revisionStatus(r);
+    const set = (k) => (e) => { setTouched(true); setRev((x) => ({ ...x, [k]: e.target.value })); };
+    return html`<div class="grid3">
+        <label class="field"><span>Roky (1. rámeček)</span>
+          <input class="input bigvalue" value=${rev.years} inputmode="numeric" placeholder="?" onFocus=${freeze} onInput=${set('years')} /></label>
+        <label class="field"><span>Datum (poslední)</span>
+          <input class="input bigvalue" value=${rev.date} inputmode="decimal" placeholder="13.03.24" onFocus=${freeze} onInput=${set('date')} /></label>
+        <label class="field"><span>+ měsíců</span>
+          <input class="input bigvalue" value=${rev.ext} inputmode="numeric" placeholder="0" onFocus=${freeze} onInput=${set('ext')} /></label>
+      </div>
+      <div class=${`hint ${st.expired ? 'err' : ''}`}>
+        ${st.until
+          ? st.expired ? html`<b>⚠ Revize je prošlá – platila do ${formatDay(st.until)}.</b>`
+            : html`Platí do <b>${formatDay(st.until)}</b>${st.soon ? ' – brzy vyprší' : ''}.`
+          : rev.date && !r.years ? 'Doplňte počet let z prvního rámečku.' : 'Namiřte na nápis revize.'}
+      </div>
+      <div class="hint">${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand.stable ? '' : ' (ověřuji…)'}` : ''}
+        ${knownValue && html` · v paměti: ${knownValue}`}</div>`;
   }
 
   function weightPanel() {
@@ -559,7 +635,7 @@ export function Trainer({ onClose }) {
               <button class="btn ok big" style="flex:2" onClick=${saveWagon}><${Icon} name="check" /> Uložit a další vůz</button>
             </div>`
         : html`
-          ${field.type === 'weight' ? weightPanel() : field.type === 'switch'
+          ${field.type === 'weight' ? weightPanel() : field.type === 'revision' ? revisionPanel() : field.type === 'switch'
             ? html`<${Seg} value=${choice} options=${field.options} onChange=${(v) => { setChoice(v); setTouched(true); }} />
                 ${field.manual && html`<label class="manual">Jiný počet:
                   <input class="input" inputmode="numeric" value=${field.options.some(([v]) => v === choice) ? '' : choice ?? ''}

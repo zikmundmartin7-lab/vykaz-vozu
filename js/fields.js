@@ -44,7 +44,8 @@ export const FIELDS = [
   { key: 'rezim', title: 'Přestavovač G/P', short: 'G/P', hint: 'páka režimu brzdění', type: 'switch', options: [['G', 'G'], ['P', 'P']], default: 'P' },
   { key: 'naklad', title: 'Přestavovač prázdný / ložený', short: 'Prázdný/ložený', hint: 'páka prázdný – ložený', type: 'switch',
     options: [['prazdny', 'Prázdný'], ['lozeny', 'Ložený'], ['auto', 'Samočinný']], default: 'prazdny' },
-  { key: 'revize', title: 'Revize', short: 'Revize', hint: 'nápis REV s dílnou a datem', type: 'text', wagonKey: 'revision' },
+  { key: 'revize', title: 'Revize', short: 'Revize', type: 'revision', wagonKey: 'revision',
+    hint: '1. rámeček = počet let, poslední rámeček = datum, případně volně „+3 M“' },
 ];
 export const FIELD = Object.fromEntries([...FIELDS, HAND_T].map((f) => [f.key, f]));
 
@@ -141,23 +142,87 @@ export function extractField(field, lines) {
     const li = lines.findIndex((l) => /^(LL|K|L)$/.test(l.text.trim()));
     return li < 0 ? null : { value: lines[li].text.trim(), lines: [li] };
   }
-  if (field.key === 'revize') {
-    const li = lines.findIndex((l) => REV.test(l.text));
-    if (li >= 0) {
-      // celý řádek nápisu (REV, dílna a datum bývají vedle sebe)
-      const row = lines.map((l, i) => [l, i]).filter(([l]) => l.row === lines[li].row);
-      const text = row.map(([l]) => l.text).join(' ').replace(/\s+/g, ' ').trim();
-      return { value: text, lines: row.map(([, i]) => i), dated: DATE.test(text) };
-    }
-    // „REV“ bývá v rámečku a síť ho často nepřečte: datum a vlevo od něj kód dílny („1003 18.06.26“)
-    const di = lines.findIndex((l) => DATE.test(l.text));
-    if (di < 0) return null;
-    const date = lines[di].text.match(DATE)[0].replace(/\s/g, '');
-    const left = lines[di - 1];
-    const code = left && left.row === lines[di].row && /^[A-Z0-9-]{2,6}$/i.test(left.text.trim()) ? left.text.trim().toUpperCase() : '';
-    return { value: ['REV', code, date].filter(Boolean).join(' '), lines: code ? [di - 1, di] : [di], dated: true };
-  }
+  if (field.key === 'revize') return extractRevision(lines);
   return null;
+}
+
+// ───── Revize: [roky] … [datum] +M ─────
+// V prvním rámečku je počet let platnosti, v posledním datum revize; písmena mezi nimi (dílna) nejsou potřeba.
+// Volně za rámečky může být „+3 M“ = prodloužení o 3 měsíce. Platí do = datum + roky + měsíce.
+// Hodnota se ukládá jako „roky|datum|měsíce“ (např. „6|13.03.24|3“).
+
+const EXT = /\+\s*(\d{1,2})\s*M/i;
+
+export function parseRevision(v) {
+  const [years, date, ext] = String(v ?? '').includes('|') ? String(v).split('|') : ['', String(v ?? '').match(DATE)?.[0] ?? '', ''];
+  return { years: years ? Number(years) : null, date: (date ?? '').replace(/\s/g, ''), ext: ext ? Number(ext) : 0 };
+}
+
+export const formatRevision = ({ years, date, ext }) => `${years ?? ''}|${date ?? ''}|${ext || 0}`;
+
+/** Datum revize „dd.mm.rr“ nebo „dd.mm.rrrr“ → Date (null, když nedává smysl). */
+export function parseRevDate(text) {
+  const m = String(text ?? '').match(/(\d{1,2})\s?\.\s?(\d{1,2})\s?\.\s?(\d{2,4})/);
+  if (!m) return null;
+  let y = Number(m[3]);
+  if (y < 100) y += y < 80 ? 2000 : 1900;
+  const d = new Date(y, Number(m[2]) - 1, Number(m[1]));
+  return d.getMonth() === Number(m[2]) - 1 && d.getDate() === Number(m[1]) ? d : null;
+}
+
+/** Platnost revize: { until: Date | null, expired, soon } (soon = vyprší do 30 dnů). */
+export function revisionStatus(rev) {
+  const r = typeof rev === 'string' ? parseRevision(rev) : rev;
+  const d = parseRevDate(r?.date);
+  if (!d || !r.years) return { until: null, expired: false, soon: false };
+  const until = new Date(d.getFullYear() + r.years, d.getMonth() + (r.ext || 0), d.getDate());
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return { until, expired: until < today, soon: until >= today && until - today < 30 * 86400000 };
+}
+
+export const formatDay = (d) => (d ? `${d.getDate()}. ${d.getMonth() + 1}. ${d.getFullYear()}` : '');
+
+/**
+ * Nejlevější samostatné číslo 1–12 v řádku s datem = roky, datum = poslední rámeček, „+N M“ za ním.
+ * yearsBox = místo, kde by měl být 1. rámeček, když roky nenašel (dočte je readRevisionYears).
+ */
+export function extractRevision(lines) {
+  const dates = lines.map((l, i) => [l, i]).filter(([l]) => DATE.test(zeros(l.text)));
+  if (!dates.length) return null;
+  // přednost má datum v řádku se slovem REV, jinak to, vlevo od kterého je ještě nějaký rámeček
+  const pick = dates.find(([l]) => lines.some((x) => x.row === l.row && REV.test(x.text)))
+    ?? dates.find(([l]) => lines.some((x) => x.row === l.row && x.x < l.x)) ?? dates[0];
+  const [dl, di] = pick;
+  const date = zeros(dl.text).match(DATE)[0].replace(/\s/g, '');
+  const row = lines.map((l, i) => [l, i]).filter(([l]) => l.row === dl.row).sort((a, b) => a[0].x - b[0].x);
+  const left = row.filter(([l]) => l.x + l.w / 2 < dl.x);
+  const yearsHit = left.find(([l]) => /^\d{1,2}\s*[JjLlRr]?$/.test(l.text.trim()) && Number(l.text.match(/\d+/)[0]) >= 1
+    && Number(l.text.match(/\d+/)[0]) <= 12);
+  // „+3 M“ bývá hned za datem, někdy jako samostatné rámečky „+3“ a „M“
+  const right = lines.map((l, i) => [l, i]).filter(([l]) => l.x > dl.x + dl.w * 0.5
+    && Math.abs(l.y + l.h / 2 - (dl.y + dl.h / 2)) < dl.h * 1.2);
+  const tail = right.map(([l]) => l.text).join(' ');
+  const extHit = tail.match(EXT) ?? dl.text.match(EXT);
+  const rev = { years: yearsHit ? Number(yearsHit[0].text.match(/\d+/)[0]) : null, date, ext: extHit ? Number(extHit[1]) : 0 };
+  // kde by měl být 1. rámeček, když v něm síť číslici nenašla (samotnou číslici v rámečku detektor přehlíží)
+  // nejlevější „opravdový“ rámeček (drobné úlomky, které detektor najde u okraje číslice, se nepočítají)
+  const first = (row.find(([l]) => l.h >= dl.h * 0.6 && l.x < dl.x) ?? [dl])[0];
+  const yearsBox = yearsHit ? null : { x: Math.max(0, first.x - first.h * 1.7), y: first.y, w: Math.min(first.x, first.h * 1.6), h: first.h };
+  return {
+    value: formatRevision(rev), rev, yearsBox,
+    lines: [yearsHit?.[1], di, ...(extHit ? right.filter(([l]) => /\+|M/i.test(l.text)).map(([, i]) => i) : [])].filter((i) => i != null),
+  };
+}
+
+/** Roky z místa 1. rámečku přečtené přímo (bez hledání nápisů); readLine = čtení jednoho řádku z ocr.js. */
+export async function readRevisionYears(found, src, readLine) {
+  if (!found?.yearsBox || found.yearsBox.w < 8) return found;
+  const { text } = await readLine(src, found.yearsBox).catch(() => ({ text: '' }));
+  const n = Number(text.trim().match(/^\D{0,2}(\d{1,2})\D{0,2}$/)?.[1]);
+  if (!(n >= 1 && n <= 12)) return found;
+  const rev = { ...found.rev, years: n };
+  return { ...found, rev, value: formatRevision(rev) };
 }
 
 /**
@@ -217,6 +282,12 @@ export function displayValue(field, value) {
   if (field.type === 'number') return formatNumber(value);
   if (field.type === 'qty' || field.type === 'weight') return `${Number(value).toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} ${field.unit}`;
   if (field.key === 'axles') return `${value} náprav${Number(value) <= 4 ? 'y' : ''}`;
+  if (field.type === 'revision') {
+    const r = parseRevision(value);
+    const st = revisionStatus(r);
+    const base = `${r.years ? `${r.years} r. od ` : ''}${r.date}${r.ext ? ` +${r.ext} M` : ''}`;
+    return st.until ? `${base} → ${st.expired ? 'PROŠLÁ ' : 'do '}${formatDay(st.until)}` : base;
+  }
   if (field.type === 'switch') return field.options.find(([v]) => v === value)?.[1] ?? value;
   return value;
 }

@@ -106,6 +106,7 @@ input.input:focus, textarea.input:focus { outline: 2px solid var(--primary); out
 .input-unit input { padding-right: 2.2rem; }
 .input-unit em { position: absolute; right: .75rem; top: 50%; transform: translateY(-50%); font-style: normal; color: var(--muted); }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 .75rem; align-items: end; }
+.grid3 { display: grid; grid-template-columns: 1fr 1.5fr 1fr; gap: 0 .5rem; align-items: end; }
 .field-title { font-size: .85rem; color: var(--muted); margin: .4rem 0 .3rem; }
 label.check { display: flex; align-items: center; gap: .6rem; min-height: 44px; margin: .3rem 0; cursor: pointer; }
 label.check input { width: 22px; height: 22px; flex: none; accent-color: var(--primary); }

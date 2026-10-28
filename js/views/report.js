@@ -2,6 +2,7 @@
 
 import { html, useState } from '../../vendor/preact-htm.js';
 import { optionLabel, entryBrakeWeight, entryMassKg, totals, fmt, plural, toLocalInput, formatDate } from '../model.js';
+import { revisionStatus } from '../fields.js';
 import { Topbar, Icon, WagonNumber, toast } from '../ui.js';
 
 export const remember = (key, value) => { try { localStorage.setItem(`vykaz:${key}`, value); } catch {} };
@@ -88,6 +89,7 @@ export function ReportView({ report, save }) {
                 <span class="chip">${optionLabel('naklad', e.naklad)}</span>
                 ${e.kohout === 'vypnuta' && html`<span class="chip bad">Brzda vypnuta</span>`}
                 ${e.rucni === 'zabrzdena' && html`<span class="chip warn">Ruční zabrzděna</span>`}
+                ${revisionStatus(e.revision).expired && html`<span class="chip bad">Revize prošlá</span>`}
                 ${bw === null || mass === null
                   ? html`<span class="chip warn">Chybí údaje</span>`
                   : html`<span class="chip ok">${fmt(mass / 1000)} t · BV ${fmt(bw)} t</span>`}

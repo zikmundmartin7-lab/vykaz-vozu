@@ -10,7 +10,7 @@ import {
 import { db } from '../db.js';
 import { readText } from '../ocr.js';
 import { brakeModels, predictSwitch } from '../brake.js';
-import { HAND_BRAKE, HAND_BRAKE_MEANING } from '../fields.js';
+import { HAND_BRAKE, HAND_BRAKE_MEANING, parseRevision, formatRevision, revisionStatus, formatDay } from '../fields.js';
 import { Topbar, Icon, Seg, NumField, NumberInput, PhotoButton, BlobImg, toast, go } from '../ui.js';
 
 const FIELD_NO = { axles: '47.', length_m: '48.', tare_kg: '50.', hand_bw_t: '', hand_force_kn: '53.', max_speed: '57.' };
@@ -163,6 +163,24 @@ export function EntryView({ report, entryId, save }) {
     toast(`Vyplněno ${fmt(v, 3)}${focus.unit ? ` ${focus.unit}` : ''}.`);
   }
 
+  // Revize: roky (1. rámeček), datum (poslední rámeček), prodloužení v měsících („+3 M“) a platnost
+  function revisionFields() {
+    const r = parseRevision(e.revision);
+    const st = revisionStatus(r);
+    const set = (k, v) => update({ revision: formatRevision({ ...r, [k]: k === 'date' ? v.trim() : Number(v) || (k === 'ext' ? 0 : null) }) });
+    return html`<div class="field-title">Revize</div>
+      <div class="grid3">
+        <label class="field"><span>Roky</span>
+          <input class="input" inputmode="numeric" value=${r.years ?? ''} onInput=${(ev) => set('years', ev.target.value)} /></label>
+        <label class="field"><span>Datum</span>
+          <input class="input" inputmode="decimal" placeholder="13.03.24" value=${r.date} onInput=${(ev) => set('date', ev.target.value)} /></label>
+        <label class="field"><span>+ měsíců</span>
+          <input class="input" inputmode="numeric" value=${r.ext || ''} onInput=${(ev) => set('ext', ev.target.value)} /></label>
+      </div>
+      ${st.until && html`<p class=${`hint ${st.expired ? 'err' : ''}`} style="margin-top:-.4rem">
+        ${st.expired ? html`<b>⚠ Revize je prošlá – platila do ${formatDay(st.until)}.</b>` : `Platí do ${formatDay(st.until)}${st.soon ? ' – brzy vyprší' : ''}.`}</p>`}`;
+  }
+
   const massKg = entryMassKg(e);
   const tc = trackClass(e);
   const thumbs = (kind) => photos.filter((s) => s.kind === kind);
@@ -224,8 +242,7 @@ export function EntryView({ report, entryId, save }) {
           ${WAGON_FIELDS.map(([key, label, unit]) => html`<${NumField} label=${`${FIELD_NO[key]} ${label}`.trim()} unit=${unit} value=${e[key]}
             onFocus=${() => setFocus({ key, unit })} onChange=${(v) => update({ [key]: v })} />`)}
         </div>
-        <label class="field"><span>Revize (nápis REV)</span>
-          <input class="input" value=${e.revision ?? ''} onInput=${(ev) => update({ revision: ev.target.value })} /></label>
+        ${revisionFields()}
         ${e.series_note && html`<p class="hint err">${e.series_note}</p>`}
         <div class="field-title">Rámeček u síly zajišťovací brzdy (pod vlastní hmotností)</div>
         <${Seg} value=${e.hand_brake} options=${HAND_BRAKE} bad=${['cerveny']}
