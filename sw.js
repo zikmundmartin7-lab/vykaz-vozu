@@ -3,7 +3,7 @@
 // Velké soubory (neuronové sítě, ONNX runtime): jednou stáhnout a držet ve vlastní zásobě MODELS,
 // aby se při každém vydání aplikace nestahovalo znovu 25 MB. Při změně modelu zvýšit MODELS.
 
-const CACHE = 'vykaz-v8';
+const CACHE = 'vykaz-v9';
 const MODELS = 'vykaz-modely-v1';
 
 const SHELL = [

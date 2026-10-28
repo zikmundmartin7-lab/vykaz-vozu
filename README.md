@@ -30,7 +30,7 @@ Vše se ukládá jen v telefonu (v prohlížeči). Ven se data dostanou exportem
 
 Každé potvrzení uloží snímek, potvrzenou hodnotu, všechen přečtený text s rámečky a označený nápis. Z toho se natrénuje síť, která pozná, který nápis je který údaj, a sítě na přestavovače.
 
-Údaje se zatím hledají pravidly: hmotnost = číslo s kg mezi 8 a 60 t, síla zajišťovací brzdy = samostatné číslo s t, zajišťovací síla = číslo s kN, délka = číslo s m mezi 5 a 40, rychlost = číslo s km/h (bez jednotky SS v tabulce zatížení = 120, S = 100), revize = řádek s nápisem REV. Čtecí síť nezná českou diakritiku (ŽOS přečte jako OS) – text revize je potřeba opravit.
+Údaje se zatím hledají pravidly: hmotnost = číslo s kg mezi 8 a 60 t, síla zajišťovací brzdy = samostatné číslo s t, zajišťovací síla = číslo s kN, délka = nejdelší číslo s m mezi 8 a 40, rychlost = číslo s km/h (bez jednotky SS v tabulce zatížení = 120, S = 100), revize = řádek s nápisem REV, a když ho síť nepřečte, datum s kódem dílny vlevo („REV 1003 18.06.26“). Nula přečtená jako písmeno o („20.ot“) se opraví. Čtecí síť nezná českou diakritiku (ŽOS přečte jako OS) – text revize je potřeba opravit.
 
 ## Trénink sítě na přestavovače
 

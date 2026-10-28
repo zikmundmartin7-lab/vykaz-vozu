@@ -36,10 +36,14 @@ const LOOKALIKE = { O: '0', o: '0', Q: '0', D: '0', I: '1', l: '1', i: '1', '|':
 
 // Přečtené řádky → číselná slova v pořadí čtení. Slovo s většinou číslic se opraví (O→0, I→1 …),
 // slova z písmen (RIV, TEN, D-DB, PL-FPL …) se přeskočí – na novějších vozech bývají mezi částmi čísla.
+// Desetinná čísla (tabulka zatížení „48,0“, „62.5“) nejsou části čísla vozu. Čárka v čísle vozu nebývá nikdy,
+// tečka jen místo pomlčky před kontrolní číslicí (za trojčíslím) – proto se maže jen tečka za 1–2 číslicemi.
+const DECIMAL = /\b\d+,\d+\b|\b\d{1,2}\.\d+\b/g;
+
 function digitTokens(lines) {
   const tokens = [];
   for (const [li, l] of lines.entries()) {
-    for (const word of l.text.split(/[^0-9A-Za-z|!]+/)) {
+    for (const word of l.text.replace(DECIMAL, ' ').split(/[^0-9A-Za-z|!]+/)) {
       const digits = word.replace(/\D/g, '').length;
       if (!digits || digits / word.length < 0.6) continue;
       const d = [...word].map((c) => (/\d/.test(c) ? c : LOOKALIKE[c] ?? '')).join('');

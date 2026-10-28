@@ -188,7 +188,7 @@ export async function readLine(src, box) {
 }
 
 // Seskupení do řádků: obdélníky se svisle překrývají aspoň z poloviny menší výšky.
-function sortLines(lines) {
+export function sortLines(lines) {
   const sorted = [...lines].sort((a, b) => a.y + a.h / 2 - (b.y + b.h / 2));
   const rows = [];
   for (const l of sorted) {

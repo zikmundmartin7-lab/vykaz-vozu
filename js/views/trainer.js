@@ -301,7 +301,7 @@ export function Trainer({ onClose }) {
         wagon: field.key === 'cislo' ? value : values.cislo ?? '',
         created_at: new Date().toISOString(),
         source: 'trenink',
-        predicted: field.type === 'switch' ? (pred ? { label: pred.label, prob: pred.prob } : null) : (cand ? { label: cand.value } : null),
+        predicted: pred ? { label: pred.label, prob: pred.prob } : cand ? { label: cand.value } : null,
         ocr: shot.lines.length ? ocrRecord(shot) : null,
         match: tapped !== null ? [tapped] : shot === frame ? matchedLines(value) : [],
       });

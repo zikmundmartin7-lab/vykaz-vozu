@@ -46,10 +46,13 @@ function phrases(lines) {
   return out;
 }
 
+// Síť občas čte nulu jako písmeno o („20.ot“, „12,o kN“).
+const zeros = (text) => text.replace(/(\d[.,]?)([oO]+)/g, (_, a, o) => a + '0'.repeat(o.length));
+
 function quantities(lines) {
   const out = [];
   for (const p of phrases(lines)) {
-    for (const m of p.text.matchAll(QTY)) {
+    for (const m of zeros(p.text).matchAll(QTY)) {
       const v = Number(`${m[1].replace(/[ .]/g, '')}${m[2] ? `.${m[2]}` : ''}`);
       const unit = m[3].toLowerCase() === 'kn' ? 'kN' : m[3].toLowerCase();
       if (Number.isFinite(v)) out.push({ v, unit, li: p.li, text: p.text, decimals: Boolean(m[2]), raw: m[0] });
@@ -58,7 +61,7 @@ function quantities(lines) {
   return out;
 }
 
-const numbersInLine = (text) => (text.match(/\d+(?:[,.]\d+)?/g) ?? []).length;
+const numbersInLine = (text) => (zeros(text).match(/\d+(?:[,.]\d+)?/g) ?? []).length;
 
 /** Hodnota v jednotce údaje (t ↔ kg) nebo null, když jednotka nesedí. */
 function inUnit(q, unit) {
@@ -81,7 +84,8 @@ const RULES = {
   // tabulka zatížení (A, B1, C … s několika hodnotami v řádku) ruční brzda není
   hand_t: (q) => (q.unit === 't' && q.v >= 3 && q.v <= 60 ? 1 + (numbersInLine(q.text) === 1 ? 2 : 0) : 0),
   hand_kn: (q) => (q.unit === 'kN' && q.v >= 3 && q.v <= 200 ? 3 : 0),
-  length: (q) => (q.unit === 'm' && q.v >= 5 && q.v <= 40 ? 1 + (q.decimals ? 2 : 0) : 0),
+  // délka přes nárazníky je nejdelší „m“ na voze; kratší (např. 7,00 m mezi otočnými čepy) ustoupí
+  length: (q) => (q.unit === 'm' && q.v >= 8 && q.v <= 40 ? 1 + (q.decimals ? 2 : 0) + q.v / 100 : 0),
   speed: (q) => (q.unit === 'km/h' && q.v >= 10 && q.v <= 200 ? 3 : 0),
 };
 
@@ -119,11 +123,19 @@ export function extractField(field, lines) {
   }
   if (field.key === 'revize') {
     const li = lines.findIndex((l) => REV.test(l.text));
-    if (li < 0) return null;
-    // celý řádek nápisu (REV, dílna a datum bývají vedle sebe)
-    const row = lines.map((l, i) => [l, i]).filter(([l]) => l.row === lines[li].row);
-    const text = row.map(([l]) => l.text).join(' ').replace(/\s+/g, ' ').trim();
-    return { value: text, lines: row.map(([, i]) => i), dated: DATE.test(text) };
+    if (li >= 0) {
+      // celý řádek nápisu (REV, dílna a datum bývají vedle sebe)
+      const row = lines.map((l, i) => [l, i]).filter(([l]) => l.row === lines[li].row);
+      const text = row.map(([l]) => l.text).join(' ').replace(/\s+/g, ' ').trim();
+      return { value: text, lines: row.map(([, i]) => i), dated: DATE.test(text) };
+    }
+    // „REV“ bývá v rámečku a síť ho často nepřečte: datum a vlevo od něj kód dílny („1003 18.06.26“)
+    const di = lines.findIndex((l) => DATE.test(l.text));
+    if (di < 0) return null;
+    const date = lines[di].text.match(DATE)[0].replace(/\s/g, '');
+    const left = lines[di - 1];
+    const code = left && left.row === lines[di].row && /^[A-Z0-9-]{2,6}$/i.test(left.text.trim()) ? left.text.trim().toUpperCase() : '';
+    return { value: ['REV', code, date].filter(Boolean).join(' '), lines: code ? [di - 1, di] : [di], dated: true };
   }
   return null;
 }
