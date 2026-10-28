@@ -63,8 +63,8 @@ export const db = {
 };
 
 /**
- * Verze 10 ukládala u ruční brzdy význam s obráceným výkladem barev (plosina = červený rámeček,
- * zeme = černý). Od verze 11 se ukládá barva rámečku – převod je opakovatelný (mění jen staré hodnoty).
+ * Verze 10 ukládala u ruční brzdy význam s obráceným výkladem barev (plosina = červený rámeček, zeme = jiný),
+ * verze 11 „cerny“. Teď se ukládá cerveny / jiny / nema – převod je opakovatelný (mění jen staré hodnoty).
  */
 export async function migrateHandBrake(old) {
   const fix = (v) => old[v] ?? v;

@@ -230,7 +230,7 @@ export function EntryView({ report, entryId, save }) {
         <div class="field-title">Rámeček u síly zajišťovací brzdy (pod vlastní hmotností)</div>
         <${Seg} value=${e.hand_brake} options=${HAND_BRAKE} bad=${['cerveny']}
           onChange=${(v) => update({ hand_brake: v, ...(v === 'nema' ? { rucni: 'nema' } : e.rucni === 'nema' ? { rucni: 'odbrzdena' } : {}) })} />
-        <div class="hint">${e.hand_brake ? html`→ <b>${HAND_BRAKE_MEANING[e.hand_brake]}</b>` : 'červený = pořádací brzda ze země · černý = ruční brzda z plošiny'}</div>
+        <div class="hint">${e.hand_brake ? html`→ <b>${HAND_BRAKE_MEANING[e.hand_brake]}</b>` : 'červený = pořádací brzda ze země · jiná barva (černá, bílá…) = ruční brzda z plošiny'}</div>
         <div class="field-title">51. Druh brzdových špalíků</div>
         <${Seg} value=${e.blocks} options=${BLOCKS.map(([v, l]) => [v, l])} onChange=${(v) => update({ blocks: e.blocks === v ? null : v })} />
         <div class="hint">${BLOCKS.find(([v]) => v === e.blocks)?.[2] ?? 'K, L, LL nekovové špalíky · D kotoučová brzda · F litinové špalíky'}</div>

@@ -132,7 +132,7 @@ export function Trainer({ onClose }) {
   const [input, setInput] = useState('');
   const [input2, setInput2] = useState('');          // síla zajišťovací brzdy (t) v kroku s hmotností
   const [cand2, setCand2] = useState(null);
-  const [frameColor, setFrameColor] = useState(null); // { value: cerveny | cerny | null, why }
+  const [frameColor, setFrameColor] = useState(null); // { value: cerveny | jiny | null, why }
   const [info, setInfo] = useState(null);            // řada vozu podle čísla
   const [choice, setChoice] = useState(null);        // poloha přestavovače
   const [pred, setPred] = useState(null);
@@ -466,7 +466,7 @@ export function Trainer({ onClose }) {
       </div>
       <div class="field-title">Rámeček u síly zajišťovací brzdy</div>
       <${Seg} value=${choice} options=${HAND_BRAKE} bad=${['cerveny']} onChange=${(v) => { setChoice(v); setTouched(true); }} />
-      <div class="hint">${choice ? html`→ <b>${HAND_BRAKE_MEANING[choice]}</b>` : 'červený = pořádací brzda ze země · černý = ruční brzda z plošiny'}</div>
+      <div class="hint">${choice ? html`→ <b>${HAND_BRAKE_MEANING[choice]}</b>` : 'červený = pořádací brzda ze země · jiná barva (černá, bílá…) = ruční brzda z plošiny'}</div>
       <div class="hint">
         ${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand2 ? html` · <b>${displayValue(HAND_T, cand2.value)}</b>` : ''}${why ? ` · ${why}` : ''}`
           : 'Nic nenalezeno – přibližte se, nebo ťukněte na nápis.'}

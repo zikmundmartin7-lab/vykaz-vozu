@@ -1,5 +1,5 @@
 // Barva rámečku u síly zajišťovací brzdy (t) pod vlastní hmotností (předpis čl. 562, 528, 529):
-// červený = pořádací brzda, ovládaná ze země; černý (kontrastní, tedy i bílý) = ruční brzda, ovládaná z plošiny.
+// červený = pořádací brzda, ovládaná ze země; jakákoli jiná barva (černá, bílá…) = ruční brzda, ovládaná z plošiny.
 // Měří se na dělicí čáře mezi řádkem s kg a řádkem s t, tedy uvnitř popisového pole –
 // vůz sám bývá natřený červeně, takže okolí rámečku o barvě nic neříká.
 
@@ -18,7 +18,7 @@ export function hull(lines) {
 }
 
 /**
- * kg a t: obálky řádků (souřadnice v plátně). Vrací { value: 'cerveny' | 'cerny' | null, why }.
+ * kg a t: obálky řádků (souřadnice v plátně). Vrací { value: 'cerveny' | 'jiny' | null, why }.
  * null = nedá se rozhodnout (např. celé pole je červené a dělicí čára není vidět).
  */
 export function handBrakeFrame(canvas, kg, t) {
@@ -52,13 +52,13 @@ export function handBrakeFrame(canvas, kg, t) {
   }
   const lined = redRows.filter((f) => f > 0.45).length;
   const reddish = redRows.filter((f) => f > 0.3).length;
-  // Celé pole červené (nápis přímo na červeném voze) → podle červené nejde rozhodnout. „Černý“ rámeček
-  // bývá v kontrastní barvě k nátěru, tedy i bílý: tmavá nebo světlá čára znamená obsluhu ze země.
+  // Celé pole červené (nápis přímo na červeném voze) → podle červené nejde rozhodnout. Nečervený rámeček
+  // bývá v kontrastní barvě k nátěru: tmavá nebo světlá čára znamená jinou barvu, tedy obsluhu z plošiny.
   if (reddish >= redRows.length * 0.8) {
     const mean = lumRows.reduce((a, b) => a + b, 0) / lumRows.length;
     const line = lumRows.some((l) => l < mean * 0.55 || l > mean * 1.35);
-    return line ? { value: 'cerny', why: 'nečervená čára na červeném poli' } : { value: null, why: 'celé pole je červené' };
+    return line ? { value: 'jiny', why: 'nečervená čára na červeném poli' } : { value: null, why: 'celé pole je červené' };
   }
   if (lined >= 1) return { value: 'cerveny', why: 'červená dělicí čára' };
-  return { value: 'cerny', why: 'dělicí čára není červená' };
+  return { value: 'jiny', why: 'dělicí čára není červená' };
 }
