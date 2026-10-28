@@ -9,29 +9,31 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="css/app.css" />
-  <link rel="modulepreload" href="js/app.js" />
-  <link rel="modulepreload" href="js/model.js" />
-  <link rel="modulepreload" href="js/db.js" />
-  <link rel="modulepreload" href="js/ui.js" />
-  <link rel="modulepreload" href="js/ocr.js" />
-  <link rel="modulepreload" href="js/ort.js" />
-  <link rel="modulepreload" href="js/brake.js" />
-  <link rel="modulepreload" href="js/xlsx.js" />
-  <link rel="modulepreload" href="js/fields.js" />
-  <link rel="modulepreload" href="js/light.js" />
-  <link rel="modulepreload" href="js/series.js" />
-  <link rel="modulepreload" href="js/frame.js" />
-  <link rel="modulepreload" href="js/views/home.js" />
-  <link rel="modulepreload" href="js/views/report.js" />
-  <link rel="modulepreload" href="js/views/entry.js" />
-  <link rel="modulepreload" href="js/views/scanner.js" />
-  <link rel="modulepreload" href="js/views/output.js" />
-  <link rel="modulepreload" href="js/views/data.js" />
-  <link rel="modulepreload" href="js/views/trainer.js" />
-  <link rel="modulepreload" href="vendor/preact-htm.js" />
-  <link rel="modulepreload" href="vendor/ort/ort.wasm.min.mjs" />
-  <script type="module" src="js/app.js"></script>
+  <!-- Stejně jako Závady vozů: soubory aplikace se načítají s razítkem v adrese (?r=…), které se změní při
+       znovunačtení po aktualizaci (reloadApp v js/ui.js). iPhone by jinak po „Aktualizovat“ spustil znovu staré
+       skripty ze své paměti, dokud se aplikace úplně nezavře. Moduly mezi sebou dostanou razítko přes import map.
+       Všechny části aplikace se stáhnou najednou (modulepreload), jinak by se načítaly postupně jedna po druhé. -->
+  <script>
+    (() => {
+      let r = '';
+      try {
+        r = localStorage.getItem('app-reload') || String(Date.now());
+        localStorage.setItem('app-reload', r);
+      } catch {}
+      const q = r ? `?r=${r}` : '';
+      const mq = HTMLScriptElement.supports?.('importmap') ? q : ''; // starší Safari: moduly bez razítka
+      const modules = ['js/app.js', 'js/version.js', 'js/model.js', 'js/db.js', 'js/ui.js', 'js/ocr.js', 'js/ort.js',
+        'js/brake.js', 'js/xlsx.js', 'js/fields.js', 'js/light.js', 'js/series.js', 'js/frame.js',
+        'js/views/home.js', 'js/views/report.js', 'js/views/entry.js', 'js/views/scanner.js',
+        'js/views/output.js', 'js/views/data.js', 'js/views/trainer.js', 'vendor/preact-htm.js'];
+      const imports = Object.fromEntries(modules.map((m) => [`./${m}`, `./${m}${mq}`]));
+      document.write(`<link rel="stylesheet" href="css/app.css${q}">`
+        + `<script type="importmap">${JSON.stringify({ imports })}<\/script>`
+        + modules.map((m) => `<link rel="modulepreload" href="${m}${mq}">`).join('')
+        + '<link rel="modulepreload" href="vendor/ort/ort.wasm.min.mjs">'
+        + `<script type="module">import './js/app.js';<\/script>`);
+    })();
+  </script>
 </head>
 <body>
   <div id="app"></div>

@@ -120,3 +120,69 @@ export const go = (hash, replace = false) => {
 };
 
 export const vibrate = (ms = 60) => navigator.vibrate?.(ms);
+
+// ───── Nová verze aplikace (stejně jako Závady vozů) ─────
+
+/** Verze, kterou má service worker stažená (sw.js → CACHE 'vykaz-vNN'); 0 = nevíme. */
+export function swVersion(worker = navigator.serviceWorker?.controller) {
+  if (!worker) return Promise.resolve(0);
+  return new Promise((resolve) => {
+    const ch = new MessageChannel();
+    ch.port1.onmessage = (e) => resolve(Number(String(e.data ?? '').replace(/^vykaz-v/, '')) || 0);
+    worker.postMessage({ type: 'version' }, [ch.port2]);
+    setTimeout(() => resolve(0), 3000);
+  });
+}
+
+/**
+ * Znovunačtení aplikace (nová verze): nové razítko v adresách souborů (viz index.html), jinak by iPhone
+ * spustil znovu staré skripty ze své paměti, dokud se aplikace úplně nezavře.
+ */
+export function reloadApp() {
+  try { localStorage.setItem('app-reload', String(Date.now())); } catch {}
+  location.reload();
+}
+
+/**
+ * Aktualizace bez zavírání aplikace: zeptá se webu na novou verzi, počká, až se stáhne, a aplikaci
+ * načte znovu. Vrací 'reload' (načítá se nová verze), 'latest' (novější není), 'offline' nebo 'error'.
+ */
+export async function updateApp(current) {
+  if (!navigator.onLine) return 'offline';
+  const reg = await navigator.serviceWorker?.getRegistration();
+  if (!reg) return 'latest';
+  try {
+    await reg.update();
+    const sw = reg.installing ?? reg.waiting;
+    if (sw) {
+      await new Promise((resolve, reject) => {
+        const check = () => {
+          if (sw.state === 'activated') resolve();
+          else if (sw.state === 'redundant') reject(new Error('Stažení nové verze selhalo.'));
+        };
+        sw.addEventListener('statechange', check);
+        check();
+        setTimeout(() => reject(new Error('Stažení nové verze trvá příliš dlouho.')), 60000);
+      });
+    }
+  } catch {
+    return 'error';
+  }
+  if ((await swVersion(reg.active)) > current) {
+    reloadApp();
+    return 'reload';
+  }
+  return 'latest';
+}
+
+/** Lišta „Je k dispozici nová verze“ – ukáže se, když service worker na pozadí stáhl novou verzi. */
+export function UpdateBanner() {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const on = () => setShown(true);
+    addEventListener('app-updated', on);
+    return () => removeEventListener('app-updated', on);
+  }, []);
+  return shown && html`<button type="button" class="update-banner" onClick=${reloadApp}>
+    <b>Je k dispozici nová verze aplikace</b><span>Klepněte sem pro načtení.</span></button>`;
+}

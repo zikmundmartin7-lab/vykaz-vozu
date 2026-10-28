@@ -3,7 +3,8 @@
 import { html, useEffect, useState } from '../../vendor/preact-htm.js';
 import { totals, formatDateTime, plural, uid } from '../model.js';
 import { db } from '../db.js';
-import { Topbar, Icon, go } from '../ui.js';
+import { Topbar, Icon, go, toast, swVersion, updateApp } from '../ui.js';
+import { APP_VERSION } from '../version.js';
 import { recall } from './report.js';
 
 export async function createReport() {
@@ -30,6 +31,31 @@ const OCR_TEXT = {
   ready: ['ok', 'Rozpoznávání je v telefonu – funguje i bez signálu.'],
   error: ['warn', 'Rozpoznávání se nenačetlo. Čísla jde zadat ručně; zkuste aplikaci otevřít znovu se signálem.'],
 };
+
+// Verze aplikace = verze, která právě běží (APP_VERSION). Service worker může mít na pozadí staženou novější
+// (sw.js → CACHE) – ta se použije až po načtení znovu. Tlačítko Aktualizovat: najde novou verzi na webu,
+// stáhne ji a aplikaci načte znovu (bez zavírání). Stejně jako v Závadách vozů.
+function AppVersion() {
+  const [downloaded, setDownloaded] = useState(0);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { swVersion().then(setDownloaded); }, []);
+
+  async function update() {
+    setBusy(true);
+    const result = await updateApp(APP_VERSION);
+    if (result === 'reload') return; // aplikace se právě načítá znovu
+    if (result === 'latest') toast(`Máte nejnovější verzi (${APP_VERSION}).`);
+    if (result === 'offline') toast('Bez signálu nejde novou verzi zkontrolovat.');
+    if (result === 'error') toast('Novou verzi se nepodařilo stáhnout – zkuste to znovu.');
+    setBusy(false);
+  }
+
+  return html`<div class="app-version">
+    <span class="muted small">Verze aplikace ${APP_VERSION}${downloaded > APP_VERSION ? ` · stažená je novější verze ${downloaded}` : ''}</span>
+    <button type="button" class="btn small" disabled=${busy} onClick=${update}>
+      <${Icon} name="download" size=${18} /> ${busy ? 'Hledám novou verzi…' : 'Aktualizovat'}</button>
+  </div>`;
+}
 
 export function HomeView({ ocr }) {
   const [reports, setReports] = useState(null);
@@ -77,6 +103,7 @@ export function HomeView({ ocr }) {
           <a class="btn" href="#/data"><${Icon} name="brain" /> Nasbíraná data</a>
         </div>
       </div>
+      <${AppVersion} />
     </main>
     <div class="bottombar">
       <button class="btn primary big" onClick=${createReport}><${Icon} name="plus" /> Nový výkaz</button>

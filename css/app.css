@@ -278,6 +278,14 @@ table.foot td:last-child { width: 34%; }
 table.foot td.blank { border: 0; }
 .sheet-meta { display: flex; flex-direction: column; gap: 10px; align-items: flex-end; white-space: nowrap; }
 
+.update-banner {
+  position: fixed; left: 50%; top: max(10px, env(safe-area-inset-top)); transform: translateX(-50%); z-index: 70;
+  display: flex; flex-direction: column; gap: .1rem; width: min(92vw, 420px); padding: .7rem 1rem; text-align: left;
+  border: 0; border-radius: 12px; background: var(--ok); color: #fff; box-shadow: 0 6px 20px rgba(0, 0, 0, .25); cursor: pointer;
+}
+.update-banner span { font-size: .88rem; opacity: .95; }
+.app-version { display: flex; align-items: center; justify-content: space-between; gap: .5rem; flex-wrap: wrap; margin: 1rem 4px 0; }
+
 .toast {
   position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 60;
   background: #1d2939; color: #fff; padding: .6rem 1rem; border-radius: 10px; font-size: .92rem; max-width: 90vw;

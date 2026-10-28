@@ -13,7 +13,7 @@ import { loadOcr } from './ocr.js';
 import { newEntry, uid } from './model.js';
 import { seriesInfo } from './series.js';
 import { HAND_BRAKE_OLD } from './fields.js';
-import { Toasts, go } from './ui.js';
+import { Toasts, UpdateBanner, go } from './ui.js';
 import { HomeView } from './views/home.js';
 import { ReportView } from './views/report.js';
 import { EntryView } from './views/entry.js';
@@ -36,7 +36,19 @@ function App() {
     loadOcr().then(() => setOcr('ready'), () => setOcr('error'));
     persist();
     migrateHandBrake(HAND_BRAKE_OLD).catch(() => {});
-    return () => removeEventListener('hashchange', onHash);
+    // Nová verze: při návratu do aplikace (nejvýš jednou za 10 minut) se zeptat webu. Když je novější,
+    // service worker ji stáhne na pozadí a ohlásí se (app-updated) – nemusí se čekat na nové spuštění.
+    let lastCheck = Date.now();
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || Date.now() - lastCheck < 10 * 60000) return;
+      lastCheck = Date.now();
+      navigator.serviceWorker?.getRegistration().then((r) => r?.update()).catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      removeEventListener('hashchange', onHash);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   const reportId = path[0] === 'vykaz' ? path[1] : null;
@@ -87,8 +99,12 @@ function App() {
   return html`<${ReportView} report=${report} save=${save} />`;
 }
 
-render(html`<${App} /><${Toasts} />`, document.getElementById('app'));
+render(html`<${App} /><${Toasts} /><${UpdateBanner} />`, document.getElementById('app'));
 
 if ('serviceWorker' in navigator && location.hostname !== 'localhost') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  // updateViaCache: 'none' → novou verzi service workeru prohlížeč hledá vždy na serveru
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch((e) => console.warn('Service worker:', e));
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type === 'updated') dispatchEvent(new Event('app-updated'));
+  });
 }

@@ -13,6 +13,8 @@ Aplikace pro vozmistry: kamerou telefonu přečte číslo železničního vozu, 
 
 Vše se ukládá jen v telefonu (v prohlížeči). Ven se data dostanou exportem.
 
+**Aktualizace (stejně jako Závady vozů):** po návratu do aplikace (nejvýš jednou za 10 minut) a při každém spuštění se aplikace na pozadí zeptá na novou verzi. Když je, stáhne ji celou znovu přímo z webu a nahoře se objeví zelená lišta **Je k dispozici nová verze aplikace** – klepnutím se nová verze načte bez zavírání aplikace. Na úvodní obrazovce dole je **Verze aplikace NN** a tlačítko **Aktualizovat** (najde, stáhne a hned načte novou verzi). Čtecí sítě (25 MB) se při nové verzi znovu nestahují.
+
 ## Řada vozu z čísla
 
 Zdroje: [OTIF UTP Marking 2021](https://otif.org/fileadmin/new/3-Reference-Text/3D-Technical-Interoperability/3D1-Prescriptions-and-other-rules/UTP-MARKING-2021_e%20In-force.pdf) (kap. 11 – 1. číslice: 0, 2, 4 = vůz s nápravami, 1, 3, 8 = s podvozky; kap. 14 – číslice 5–8; definice písmen řady), [ERA – Assignment of EVN, Appendix 6 Part 9 a 12](https://www.era.europa.eu/domains/registers/evr_en). Tabulka ERA se občas doplňuje – při aktualizaci stáhnout nový `appendix_6_p9_en.xls` a spustit `tools/era_rady.py`.
@@ -59,7 +61,8 @@ V telefonu kamera funguje jen na adrese s HTTPS (např. GitHub Pages jako u Záv
 ## Struktura
 
 ```
-index.html, manifest.webmanifest, sw.js   stránka, instalace na plochu, offline
+index.html, manifest.webmanifest, sw.js   stránka, instalace na plochu, offline, aktualizace
+js/version.js                             číslo verze (zvyšuje se spolu s CACHE v sw.js)
 css/app.css                               vzhled
 js/app.js                                 směrování mezi obrazovkami
 js/model.js                               číslo vozu, hledání čísla v textu, přestavovače, brzdicí procenta
