@@ -1,6 +1,8 @@
 // Skener čísla vozu: živý obraz z kamery, síť průběžně čte text v rámečku. Číslo se přijme samo,
-// když ho přečte dvakrát po sobě a sedí kontrolní číslice, kód státu i rozdělení do skupin.
-// Záloha: fotka fotoaparátem telefonu nebo ruční zadání.
+// když ho přečte dvakrát po sobě a sedí kontrolní číslice, kód státu i rozdělení do skupin; s pouhou platnou
+// kontrolní číslicí se jen nabídne a nabídka zůstane, i když kamera z čísla odjede. Ke kontrole se ukáže
+// výřez snímku s číslem nad přečteným číslem. Záloha: fotka fotoaparátem telefonu nebo ruční zadání.
+// Kopie je v Závadách vozů (js/views/scanner.js) – změny čtení držet v obou.
 
 import { html, useEffect, useRef, useState } from '../../vendor/preact-htm.js';
 import { loadOcr, readText } from '../ocr.js';
@@ -12,6 +14,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const DECAY = 0.8;      // hlasy z předchozích snímků slábnou
 const ACCEPT = 3.2;     // „jisté“ číslo (2 body) ve dvou snímcích po sobě
 const MAYBE = 1.8;      // platná kontrolní číslice aspoň ve dvou snímcích → nabídnout
+const MAX_MAYBE = 4;    // nabídnutá čísla zůstávají k výběru, při dalších vypadne nejstarší
 
 // Rámeček na obrazovce → výřez ve skutečném obrazu kamery (video je roztažené přes object-fit: cover).
 function guideRegion(video, guide) {
@@ -35,6 +38,28 @@ function grab(video, r, canvas) {
   return canvas;
 }
 
+// Výřez snímku kolem řádků, ze kterých se číslo složilo (ke kontrole), jako obrázek do panelu.
+function shot(canvas, lines, idx) {
+  const boxes = (idx ?? []).map((i) => lines[i]).filter(Boolean);
+  let r = { x: 0, y: 0, w: canvas.width, h: canvas.height };
+  if (boxes.length) {
+    const x0 = Math.min(...boxes.map((b) => b.x));
+    const y0 = Math.min(...boxes.map((b) => b.y));
+    const x1 = Math.max(...boxes.map((b) => b.x + b.w));
+    const y1 = Math.max(...boxes.map((b) => b.y + b.h));
+    const m = Math.max(...boxes.map((b) => b.h)) * 0.4;
+    const x = Math.max(0, x0 - m);
+    const y = Math.max(0, y0 - m);
+    r = { x, y, w: Math.min(canvas.width, x1 + m) - x, h: Math.min(canvas.height, y1 + m) - y };
+  }
+  const k = Math.min(1, 900 / r.w, 360 / r.h);
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(r.w * k));
+  c.height = Math.max(1, Math.round(r.h * k));
+  c.getContext('2d').drawImage(canvas, r.x, r.y, r.w, r.h, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.85);
+}
+
 /**
  * onDone({ number, blob }) – blob je fotka s číslem (uloží se pro pozdější trénink).
  * position(number) – pořadí vozu, pokud už ve výkazu je (jinak null).
@@ -43,10 +68,11 @@ export function Scanner({ onDone, onClose, position }) {
   const videoRef = useRef();
   const guideRef = useRef();
   const pausedRef = useRef(false);
+  const offeredRef = useRef([]);                // nabídnutá čísla { number, shot } v pořadí, jak přišla
   const [state, setState] = useState('start'); // start | scan | nocamera
   const [ready, setReady] = useState(false);
   const [reading, setReading] = useState('');
-  const [found, setFound] = useState(null);     // { number, blob }
+  const [found, setFound] = useState(null);     // { number, blob, shot }
   const [maybe, setMaybe] = useState([]);
   const [manual, setManual] = useState(null);   // rozepsané číslo při ručním zadání
   const [busy, setBusy] = useState(false);
@@ -56,6 +82,15 @@ export function Scanner({ onDone, onClose, position }) {
   const gainRef = useRef(1);
   gainRef.current = light.gain;
   pausedRef.current = Boolean(found || manual !== null || busy);
+
+  const isOffered = (n) => offeredRef.current.some((m) => m.number === n);
+  // Nabídka se jen doplňuje (pořadí zůstává, ať se tlačítko neposune pod prstem) – nezmizí, když kamera odjede.
+  function offer(items) {
+    const fresh = items.filter((m) => !isOffered(m.number));
+    if (!fresh.length) return;
+    offeredRef.current = [...offeredRef.current, ...fresh].slice(-MAX_MAYBE);
+    setMaybe(offeredRef.current);
+  }
 
   useEffect(() => {
     let stopped = false;
@@ -100,9 +135,13 @@ export function Scanner({ onDone, onClose, position }) {
         const best = [...votes].sort((a, b) => b[1].sure - a[1].sure)[0];
         if (best && best[1].sure >= ACCEPT) {
           vibrate(80);
-          setFound({ number: best[0], blob: await toJpeg(canvas) });
+          const c = cands.find((x) => x.number === best[0]);
+          const shown = shot(canvas, lines, c?.lines);
+          setFound({ number: best[0], blob: await toJpeg(canvas), shot: shown });
         } else {
-          setMaybe([...votes].filter(([, v]) => v.valid >= MAYBE).map(([n]) => n));
+          // výřez ke kontrole jen jednou, když se číslo poprvé nabídne (převod na obrázek něco stojí)
+          offer(cands.filter((c) => votes.get(c.number).valid >= MAYBE && !isOffered(c.number))
+            .map((c) => ({ number: c.number, blob: null, shot: shot(canvas, lines, c.lines) })));
         }
         await sleep(60);
       }
@@ -121,9 +160,9 @@ export function Scanner({ onDone, onClose, position }) {
       const lines = await readText(bmp, { maxSide: 1600 });
       const cands = numberCandidates(lines);
       const blob = await toJpeg(bmp);
-      if (cands[0]?.valid) setFound({ number: cands[0].number, blob });
+      if (cands[0]?.valid) setFound({ number: cands[0].number, blob, shot: shot(bmp, lines, cands[0].lines) });
       else {
-        setMaybe(cands.filter((c) => c.valid).slice(0, 3).map((c) => c.number));
+        offer(cands.filter((c) => c.valid).slice(0, 3).map((c) => ({ number: c.number, blob: null, shot: shot(bmp, lines, c.lines) })));
         setError('Číslo se z fotky nepodařilo spolehlivě přečíst. Vyfoťte ho zblízka, nebo ho zadejte ručně.');
       }
     } catch (e) {
@@ -157,9 +196,13 @@ export function Scanner({ onDone, onClose, position }) {
     <div class="panel">
       ${error && html`<div class="notice warn">${error}</div>`}
       ${found
-        ? html`<div class="found"><${WagonNumber} number=${found.number} /></div>
+        ? html`<div class="compare">
+              ${found.shot && html`<img class="shot" src=${found.shot} alt="Výřez snímku s číslem" />`}
+              <div class="found"><${WagonNumber} number=${found.number} /></div>
+            </div>
             <p class="small muted" style="text-align:center">
-              ${pos ? html`<b class="err">Vůz už ve výkazu je (${pos}. vůz).</b>` : 'Kontrolní číslice sedí. Zkontrolujte číslo s vozem.'}
+              ${pos ? html`<b class="err">Vůz už ve výkazu je (${pos}. vůz).</b>`
+                : found.shot ? 'Nahoře snímek, pod ním přečtené číslo – porovnejte je.' : 'Kontrolní číslice sedí. Zkontrolujte číslo s vozem.'}
             </p>
             <div class="row">
               <button class="btn" style="flex:1" onClick=${() => setFound(null)}>Znovu</button>
@@ -174,9 +217,9 @@ export function Scanner({ onDone, onClose, position }) {
                 <button class="btn primary" style="flex:1" disabled=${!isCompleteNumber(manual)}
                   onClick=${() => onDone({ number: manual, blob: null })}>Použít</button>
               </div>`
-          : html`${maybe.length > 0 && html`<p class="small muted" style="margin-top:0">Možná je to:</p>
+          : html`${maybe.length > 0 && html`<p class="small muted" style="margin-top:0">Možná je to (ťukněte pro kontrolu):</p>
                 <div class="chips" style="margin-bottom:.8rem">
-                  ${maybe.map((n) => html`<button class="chip" onClick=${() => setFound({ number: n, blob: null })}>${formatNumber(n)}</button>`)}
+                  ${maybe.map((m) => html`<button class="chip" onClick=${() => setFound(m)}>${formatNumber(m.number)}</button>`)}
                 </div>`}
               <div class="row">
                 <button class="btn" style="flex:1" onClick=${() => setManual('')}>Zadat ručně</button>
