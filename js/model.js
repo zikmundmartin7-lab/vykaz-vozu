@@ -296,6 +296,63 @@ export function trackClass(e) {
   return perAxle <= 16 ? 'A' : perAxle <= 18 ? 'B' : perAxle <= 20 ? 'C' : perAxle <= 22.5 ? 'D' : 'E';
 }
 
+// Obvyklé meze údajů z nápisů – stejné jako pravidla čtení v tréninku (fields.js RULES, BW_RANGE).
+// Hodnota mimo ně bývá překlep nebo jiná jednotka (t místo kg); karta vozu ji označí, nic sama neopraví.
+const RANGES = {
+  axles: [2, 12], length_m: [5, 40], tare_kg: [8000, 60000], hand_bw_t: [3, 60], hand_force_kn: [3, 200],
+  max_speed: [10, 200], bw: [5, 200], change_t: [5, 200], change2_t: [5, 200], bw_max: [5, 200],
+};
+const MAX_AXLE_T = 22.5;   // nejvyšší hmotnost na nápravu, traťová třída D
+
+/**
+ * Neobvyklé údaje vozu ke kontrole: [{ key, text }], key = pole v kartě vozu (brzdicí váhy „bw.P_lozeny“).
+ * Meze z nápisů, kg zadané v tunách, ložený nad prázdným, hmotnost na nápravu.
+ */
+export function wagonWarnings(e) {
+  const out = [];
+  const range = (key, v, name, unit, [lo, hi]) => {
+    if (v === null || (v >= lo && v <= hi)) return;
+    const u = unit ? ` ${unit}` : '';
+    out.push({ key, text: `${name} ${fmt(v, 2)}${u} – bývá ${fmt(lo)}–${fmt(hi)}${u}` });
+  };
+  for (const [key, name, unit] of WAGON_FIELDS) {
+    const v = num(e[key]);
+    if (unit === 'kg' && v !== null && v > 0 && v < 100) {
+      out.push({ key, text: `${name} se zadává v kg: ${fmt(v, 2)} t = ${fmt(Math.round(v * 1000))} kg` });
+    } else if (key === 'axles' && v !== null && !Number.isInteger(v)) {
+      out.push({ key, text: 'Počet náprav musí být celé číslo' });
+    } else range(key, v, name, unit, RANGES[key]);
+  }
+  const cargo = num(e.cargo_kg);
+  if (cargo !== null && cargo > 0 && cargo < 100) {
+    out.push({ key: 'cargo_kg', text: `Hmotnost nákladu se zadává v kg: ${fmt(cargo, 2)} t = ${fmt(Math.round(cargo * 1000))} kg` });
+  }
+  const bw = e.bw ?? {};
+  for (const [k, name] of [...BRAKE_WEIGHTS, ...BRAKE_WEIGHTS_HALF]) range(`bw.${k}`, num(bw[k]), `Brzdicí váha ${name}`, 't', RANGES.bw);
+  for (const m of ['P', 'G']) {
+    const [empty, half, loaded] = ['prazdny', 'polo', 'lozeny'].map((p) => num(bw[`${m}_${p}`]));
+    if (empty !== null && loaded !== null && loaded <= empty) {
+      out.push({ key: `bw.${m}_lozeny`, text: `Brzdicí váha ${m} ložený (${fmt(loaded)} t) bývá vyšší než prázdný (${fmt(empty)} t)` });
+    }
+    if (half !== null && ((empty !== null && half <= empty) || (loaded !== null && half >= loaded))) {
+      out.push({ key: `bw.${m}_polo`, text: `Brzdicí váha ${m} ½ ložený (${fmt(half)} t) bývá mezi prázdným a loženým` });
+    }
+  }
+  range('change_t', num(e.change_t), 'Přestavná hmotnost', 't', RANGES.change_t);
+  range('change2_t', num(e.change2_t), 'Přestavná hmotnost ½ → ložený', 't', RANGES.change2_t);
+  if (num(e.change_t) !== null && num(e.change2_t) !== null && num(e.change2_t) <= num(e.change_t)) {
+    out.push({ key: 'change2_t', text: `Přestavná hmotnost ½ → ložený (${fmt(e.change2_t)} t) bývá vyšší než prázdný → ½ (${fmt(e.change_t)} t)` });
+  }
+  range('bw_max', num(e.bw_max), 'MAX', 't', RANGES.bw_max);
+  const m = entryMassKg(e);
+  const axles = num(e.axles);
+  if (m !== null && axles >= 1 && m / axles / 1000 > MAX_AXLE_T) {
+    out.push({ key: cargo ? 'cargo_kg' : 'tare_kg',
+      text: `Na nápravu vychází ${fmt(m / axles / 1000)} t – víc než ${fmt(MAX_AXLE_T)} t (traťová třída D); zkontrolujte hmotnosti a nápravy` });
+  }
+  return out;
+}
+
 /** Kolonka 53 se vyplní jen u vozů, u nichž se ověřila činnost ruční brzdy. */
 export const handForce = (e) => (e.rucni !== 'nema' && e.hand_checked ? num(e.hand_force_kn) : null);
 

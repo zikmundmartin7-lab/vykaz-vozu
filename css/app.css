@@ -102,6 +102,7 @@ input.input, textarea.input, select.input {
   border: 1px solid #d0d5dd; border-radius: 10px; background: #fff;
 }
 input.input:focus, textarea.input:focus { outline: 2px solid var(--primary); outline-offset: 0; border-color: var(--primary); }
+input.input.bad { border-color: var(--red); background: var(--red-bg); }   /* neobvyklá hodnota v kartě vozu */
 .input-unit { position: relative; }
 .input-unit input { padding-right: 2.2rem; }
 .input-unit em { position: absolute; right: .75rem; top: 50%; transform: translateY(-50%); font-style: normal; color: var(--muted); }

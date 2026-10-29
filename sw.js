@@ -5,7 +5,7 @@
 // Sítě na přestavovače (models/brzdy.json, názvy s razítkem) mají zásobu BRAKE: novou verzi aplikace přečkají,
 // instalace nové verze stáhne ty, které brzdy.json uvádí, a smaže už neuvedené.
 
-const CACHE = 'vykaz-v21'; // zvýšit spolu s APP_VERSION v js/version.js
+const CACHE = 'vykaz-v22'; // zvýšit spolu s APP_VERSION v js/version.js
 const MODELS = 'vykaz-modely-v1';
 const BRAKE = 'vykaz-prestavovace';
 

@@ -4,7 +4,7 @@
 
 import { html, useEffect, useRef, useState } from '../../vendor/preact-htm.js';
 import {
-  SWITCHES, BRAKE_WEIGHTS, BRAKE_WEIGHTS_HALF, BLOCKS, WAGON_FIELDS, optionLabel, bwFor, wantedLoad, entryMassKg, trackClass,
+  SWITCHES, BRAKE_WEIGHTS, BRAKE_WEIGHTS_HALF, BLOCKS, WAGON_FIELDS, optionLabel, bwFor, wantedLoad, entryMassKg, trackClass, wagonWarnings,
   ridFromLines, wagonFromEntry, renumberEntry, formatNumber, fmt, num, uid, toJpeg, isCompleteNumber,
 } from '../model.js';
 import { db } from '../db.js';
@@ -222,6 +222,10 @@ export function EntryView({ report, entryId, save }) {
   const massKg = entryMassKg(e);
   const half = e.naklad === 'polo' || e.bw?.P_polo != null || e.bw?.G_polo != null || e.change2_t != null;
   const tc = trackClass(e);
+  // neobvyklé hodnoty (překlep, t místo kg): červené pole a pod skupinou polí vysvětlení
+  const warns = wagonWarnings(e);
+  const bad = new Set(warns.map((w) => w.key));
+  const warnList = (test) => warns.filter((w) => test(w.key)).map((w) => html`<div class="hint err">⚠ ${w.text}.</div>`);
   const thumbs = (kind) => photos.filter((s) => s.kind === kind);
   const thumbRow = (kind) => thumbs(kind).length > 0 && html`<div class="thumbs">
     ${thumbs(kind).map((s) => html`<button class="linkbtn" style="padding:0" title="Smazat fotku"
@@ -283,8 +287,9 @@ export function EntryView({ report, entryId, save }) {
         </div>`}
         <div class="grid2">
           ${WAGON_FIELDS.map(([key, label, unit]) => html`<${NumField} label=${`${FIELD_NO[key]} ${label}`.trim()} unit=${unit} value=${e[key]}
-            onFocus=${() => setFocus({ key, unit })} onChange=${(v) => update({ [key]: v })} />`)}
+            bad=${bad.has(key)} onFocus=${() => setFocus({ key, unit })} onChange=${(v) => update({ [key]: v })} />`)}
         </div>
+        ${warnList((k) => WAGON_FIELDS.some(([f]) => f === k))}
         ${revisionFields()}
         ${e.series_note && html`<p class="hint err">${e.series_note}</p>`}
         <div class="field-title">Rámeček u síly zajišťovací brzdy (pod vlastní hmotností)</div>
@@ -297,11 +302,12 @@ export function EntryView({ report, entryId, save }) {
         <div class="field-title">52. Brzdicí váhy z nápisu (t)</div>
         <div class="grid2">
           ${[...BRAKE_WEIGHTS, ...(half ? BRAKE_WEIGHTS_HALF : [])].map(([key, label]) => html`<${NumField} label=${label} unit="t" value=${e.bw?.[key]}
-            onFocus=${() => setFocus({ key: `bw.${key}`, unit: 't' })} onChange=${(v) => setBw(key, v)} />`)}
+            bad=${bad.has(`bw.${key}`)} onFocus=${() => setFocus({ key: `bw.${key}`, unit: 't' })} onChange=${(v) => setBw(key, v)} />`)}
           ${[['change_t', half ? 'Přestavná prázdný → ½' : 'Přestavná hmotnost'], ...(half ? [['change2_t', 'Přestavná ½ → ložený']] : []),
             ['bw_max', 'MAX (samočinný)']].map(([key, label]) => html`<${NumField} label=${label} unit="t" value=${e[key]}
-            onFocus=${() => setFocus({ key, unit: 't' })} onChange=${(v) => update({ [key]: v })} />`)}
+            bad=${bad.has(key)} onFocus=${() => setFocus({ key, unit: 't' })} onChange=${(v) => update({ [key]: v })} />`)}
         </div>
+        ${warnList((k) => k.startsWith('bw.') || ['change_t', 'change2_t', 'bw_max'].includes(k))}
         ${thumbRow('napis')}
         <p class="hint">Údaje vozu se zapamatují podle čísla a příště se vyplní samy.</p>
       </div>
@@ -311,8 +317,9 @@ export function EntryView({ report, entryId, save }) {
           <h2 style="margin:0;flex:1">Náklad a zásilka</h2>
           ${photoBtn('rid', 'Tabulka RID')}
         </div>
-        <${NumField} label="49. Hmotnost nákladu" unit="kg" value=${e.cargo_kg}
+        <${NumField} label="49. Hmotnost nákladu" unit="kg" value=${e.cargo_kg} bad=${bad.has('cargo_kg')}
           onFocus=${() => setFocus({ key: 'cargo_kg', unit: 'kg' })} onChange=${(v) => update({ cargo_kg: v })} />
+        ${warnList((k) => k === 'cargo_kg')}
         <label class="field"><span>56. Stanice určení</span>
           <input class="input" value=${e.destination} onInput=${(ev) => update({ destination: ev.target.value })} /></label>
         <div class="grid2">

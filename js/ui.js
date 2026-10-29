@@ -61,13 +61,14 @@ const numText = (v) => (v === null || v === undefined || v === '' ? '' : String(
  * Číselné pole s jednotkou; prázdné = null. Desetinná čárka i tečka.
  * Pole drží rozepsaný text: kdyby se po každé klávese vypsalo číslo, zmizela by čárka („15,“ → 15)
  * a z 15,74 by bylo 1574. Z hodnoty se text přepíše, jen když se změní zvenku (vyplnění z nápisu).
+ * bad = neobvyklá hodnota (červený rámeček; vysvětlení vypisuje obrazovka pod poli).
  */
-export function NumField({ label, unit, value, onChange, onFocus, step = 'any' }) {
+export function NumField({ label, unit, value, onChange, onFocus, bad, step = 'any' }) {
   const [text, setText] = useState(() => numText(value));
   useEffect(() => { if (parseNum(text) !== (value ?? null)) setText(numText(value)); }, [value]);
   return html`<label class="field"><span>${label}</span>
     <div class="input-unit">
-      <input class="input" type="text" inputmode="decimal" value=${text} step=${step} onFocus=${onFocus}
+      <input class=${`input ${bad ? 'bad' : ''}`} type="text" inputmode="decimal" value=${text} step=${step} onFocus=${onFocus}
         onInput=${(e) => { setText(e.target.value); onChange(parseNum(e.target.value)); }} />
       ${unit && html`<em>${unit}</em>`}
     </div>

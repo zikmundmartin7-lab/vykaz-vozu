@@ -4,7 +4,7 @@
 import { html, useState } from '../../vendor/preact-htm.js';
 import {
   digitsOnly, bwFor, entryMassKg, handForce, trackClass, totals, formatNumber, formatDate, formatTime,
-  toLocalInput, num, fmt,
+  toLocalInput, num, fmt, wagonWarnings,
 } from '../model.js';
 import { buildXlsx, download } from '../xlsx.js';
 import { Topbar, Icon, toast } from '../ui.js';
@@ -189,6 +189,7 @@ export function OutputView({ report, save }) {
     <main class="output">
       <div class="card no-print"><${Stats} t=${t} />
         ${t.missing > 0 && html`<p class="hint err">U některých vozů chybí údaje – součty nejsou úplné.</p>`}
+        ${entries.some((e) => wagonWarnings(e).length) && html`<p class="hint err">U některých vozů jsou neobvyklé hodnoty – zkontrolujte je v kartě vozu (označené červeně).</p>`}
         ${t.brakesOff > 0 && html`<p class="hint err">Vozy s vypnutou brzdou: ${t.brakesOff} (brzdicí váha proškrtnuta).</p>`}
         <p class="hint">Brzdicí procenta = brzdicí váha podle polohy přestavovačů G/P ÷ hmotnost vozů × 100, bez lokomotivy – jen pro kontrolu, na formuláři nejsou.</p>
       </div>

@@ -1,7 +1,7 @@
 // Výkaz: údaje vlaku a vozy v pořadí. Přidávání vozů skenováním čísla.
 
 import { html, useState } from '../../vendor/preact-htm.js';
-import { optionLabel, entryBrakeWeight, entryMassKg, totals, fmt, plural, toLocalInput, formatDate } from '../model.js';
+import { optionLabel, entryBrakeWeight, entryMassKg, totals, wagonWarnings, fmt, plural, toLocalInput, formatDate } from '../model.js';
 import { revisionStatus } from '../fields.js';
 import { Topbar, Icon, WagonNumber, toast } from '../ui.js';
 
@@ -27,6 +27,7 @@ export function ReportView({ report, save }) {
     save({ ...report, [key]: value });
   };
   const t = totals(report.entries);
+  const odd = report.entries.filter((e) => wagonWarnings(e).length).length;
 
   function reverse() {
     save({ ...report, entries: [...report.entries].reverse() });
@@ -69,6 +70,7 @@ export function ReportView({ report, save }) {
 
       ${report.entries.length > 0 && html`<div class="card"><${Stats} t=${t} />
         ${t.missing > 0 && html`<p class="hint err">U ${plural(t.missing, 'vozu', 'vozů', 'vozů')} chybí údaje (hmotnost, délka, nápravy nebo brzdicí váha) – součty nejsou úplné.</p>`}
+        ${odd > 0 && html`<p class="hint err">U ${plural(odd, 'vozu', 'vozů', 'vozů')} jsou neobvyklé hodnoty (překlep, t místo kg?) – v kartě vozu jsou označené červeně.</p>`}
       </div>`}
 
       <div class="row" style="margin:18px 4px 8px">
@@ -90,6 +92,7 @@ export function ReportView({ report, save }) {
                 ${e.kohout === 'vypnuta' && html`<span class="chip bad">Brzda vypnuta</span>`}
                 ${e.rucni === 'zabrzdena' && html`<span class="chip warn">Ruční zabrzděna</span>`}
                 ${revisionStatus(e.revision).expired && html`<span class="chip bad">Revize prošlá</span>`}
+                ${wagonWarnings(e).length > 0 && html`<span class="chip warn">Zkontrolovat údaje</span>`}
                 ${bw === null || mass === null
                   ? html`<span class="chip warn">Chybí údaje</span>`
                   : html`<span class="chip ok">${fmt(mass / 1000)} t · BV ${fmt(bw)} t</span>`}
