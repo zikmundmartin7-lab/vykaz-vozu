@@ -50,15 +50,25 @@ export function Seg({ value, options, onChange, bad = [] }) {
   </div>`;
 }
 
-/** Číselné pole s jednotkou; prázdné = null. Desetinná čárka i tečka. */
+// Text v číselném poli → číslo (desetinná čárka i tečka, mezery mezi tisíci „23 500“); prázdné nebo nesmysl = null.
+const parseNum = (text) => {
+  const v = String(text ?? '').replace(',', '.').replace(/\s/g, '');
+  return v === '' || Number.isNaN(Number(v)) ? null : Number(v);
+};
+const numText = (v) => (v === null || v === undefined || v === '' ? '' : String(v).replace('.', ','));
+
+/**
+ * Číselné pole s jednotkou; prázdné = null. Desetinná čárka i tečka.
+ * Pole drží rozepsaný text: kdyby se po každé klávese vypsalo číslo, zmizela by čárka („15,“ → 15)
+ * a z 15,74 by bylo 1574. Z hodnoty se text přepíše, jen když se změní zvenku (vyplnění z nápisu).
+ */
 export function NumField({ label, unit, value, onChange, onFocus, step = 'any' }) {
+  const [text, setText] = useState(() => numText(value));
+  useEffect(() => { if (parseNum(text) !== (value ?? null)) setText(numText(value)); }, [value]);
   return html`<label class="field"><span>${label}</span>
     <div class="input-unit">
-      <input class="input" type="text" inputmode="decimal" value=${value ?? ''} step=${step} onFocus=${onFocus}
-        onInput=${(e) => {
-          const v = e.target.value.replace(',', '.').trim();
-          onChange(v === '' || Number.isNaN(Number(v)) ? null : Number(v));
-        }} />
+      <input class="input" type="text" inputmode="decimal" value=${text} step=${step} onFocus=${onFocus}
+        onInput=${(e) => { setText(e.target.value); onChange(parseNum(e.target.value)); }} />
       ${unit && html`<em>${unit}</em>`}
     </div>
   </label>`;

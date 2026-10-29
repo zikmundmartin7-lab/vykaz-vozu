@@ -5,9 +5,10 @@
 import { html, useEffect, useRef, useState } from '../../vendor/preact-htm.js';
 import {
   SWITCHES, BRAKE_WEIGHTS, BRAKE_WEIGHTS_HALF, BLOCKS, WAGON_FIELDS, optionLabel, bwFor, wantedLoad, entryMassKg, trackClass,
-  ridFromLines, wagonFromEntry, formatNumber, fmt, num, uid, toJpeg, isCompleteNumber,
+  ridFromLines, wagonFromEntry, renumberEntry, formatNumber, fmt, num, uid, toJpeg, isCompleteNumber,
 } from '../model.js';
 import { db } from '../db.js';
+import { seriesInfo } from '../series.js';
 import { readText } from '../ocr.js';
 import { brakeModels, predictSwitch } from '../brake.js';
 import { HAND_BRAKE, HAND_BRAKE_MEANING, parseRevision, formatRevision, revisionStatus, formatDay } from '../fields.js';
@@ -84,7 +85,7 @@ export function EntryView({ report, entryId, save }) {
   const [busy, setBusy] = useState(null);
   const [lines, setLines] = useState(null);
   const [focus, setFocus] = useState(null);
-  const [editNumber, setEditNumber] = useState(false);
+  const [editNumber, setEditNumber] = useState(null);   // rozepsané opravené číslo; null = neopravuje se
   const latest = useRef({});
   latest.current = { report, photos, save };
   const pending = useRef(null);
@@ -98,7 +99,9 @@ export function EntryView({ report, entryId, save }) {
     await sv({ ...r, entries: r.entries.map((x) => (x.id === entry.id ? entry : x)) });
     for (const s of ph) {
       const label = labelFor(s.kind, entry);
-      if (s.label !== label) await db.updateSample({ ...s, label, wagon: entry.number });
+      if (s.label === label && s.wagon === entry.number) continue;
+      await db.updateSample({ ...s, label, wagon: entry.number });
+      Object.assign(s, { label, wagon: entry.number });   // i kopie v paměti, ať se příště neukládá znovu
     }
     if (isCompleteNumber(entry.number)) await db.saveWagon(wagonFromEntry(entry));
   }
@@ -179,6 +182,17 @@ export function EntryView({ report, entryId, save }) {
     go(`#/vykaz/${report.id}`, true);
   }
 
+  // Opravené číslo platí až celé (Hotovo): řada, nápravy a rychlost podle nového čísla, chybějící údaje z paměti vozu.
+  async function applyNumber(n) {
+    if (n === e.number) return setEditNumber(null);
+    const other = report.entries.findIndex((x) => x.number === n && x.id !== e.id);
+    if (other >= 0) return toast(`Vůz ${formatNumber(n)} už ve výkazu je (${other + 1}. vůz).`);
+    const [oldInfo, info, wagon] = await Promise.all([seriesInfo(e.number), seriesInfo(n), db.wagon(n)]);
+    setE((prev) => renumberEntry(prev, n, wagon, oldInfo, info));
+    setEditNumber(null);
+    toast(info ? `Řada ${info.series} podle opraveného čísla.` : 'Číslo opraveno.');
+  }
+
   function fillFrom(n) {
     if (!focus) return toast('Nejdřív ťukněte do pole, kam hodnotu dát.');
     const v = convert(n, focus.unit);
@@ -221,14 +235,17 @@ export function EntryView({ report, entryId, save }) {
     <${Topbar} title=${`${index + 1}. vůz`} back=${`#/vykaz/${report.id}`} />
     <main>
       <div class="card">
-        ${editNumber
-          ? html`<${NumberInput} value=${e.number} onChange=${(n) => update({ number: n })} autoFocus />
-              <button class="btn small" onClick=${() => setEditNumber(false)}>Hotovo</button>`
+        ${editNumber !== null
+          ? html`<${NumberInput} value=${editNumber} onChange=${setEditNumber} autoFocus />
+              <div class="row">
+                <button class="btn small" onClick=${() => setEditNumber(null)}>Zrušit</button>
+                <button class="btn small primary" disabled=${!isCompleteNumber(editNumber)} onClick=${() => applyNumber(editNumber)}>Hotovo</button>
+              </div>`
           : html`<div class="row">
               <div><div style="font-size:1.35rem;font-weight:700"><span class="number">${formatNumber(e.number)}</span></div>
                 ${e.series && html`<div class="small muted">Řada ${e.series} (podle čísla)</div>`}</div>
               <span class="spacer"></span>
-              <button class="linkbtn" onClick=${() => setEditNumber(true)}>Opravit</button>
+              <button class="linkbtn" onClick=${() => setEditNumber(e.number)}>Opravit</button>
             </div>`}
       </div>
 

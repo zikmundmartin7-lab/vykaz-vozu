@@ -173,8 +173,8 @@ export function newEntry(number, wagon, prev, toStation = '') {
     id: uid(),
     number,
     rezim: prev?.rezim ?? 'P',
-    // samočinný přestavovač je vlastnost vozu, ruční se převezme od předchozího vozu
-    naklad: wagon?.load_auto ? 'auto' : wagon?.load_auto === false && prev?.naklad === 'auto' ? 'prazdny' : prev?.naklad ?? 'prazdny',
+    // samočinný přestavovač je vlastnost vozu (od předchozího vozu se nepřebírá), ruční poloha ano
+    naklad: wagon?.load_auto ? 'auto' : prev?.naklad === 'auto' ? 'prazdny' : prev?.naklad ?? 'prazdny',
     kohout: 'zapnuta',
     rucni: wagon?.hand_brake === 'nema' ? 'nema' : 'odbrzdena',
     hand_checked: false,
@@ -189,6 +189,35 @@ export function newEntry(number, wagon, prev, toStation = '') {
     samples: [],
     note: '',
   };
+}
+
+/**
+ * Údaje z řady vozu (seriesInfo z js/series.js) do vozu ve výkazu – jen tam, kde nic není (paměť vozu
+ * a ruční zadání mají přednost). U nejistého počtu náprav poznámka, ať ho vozmistr zadá ručně.
+ */
+export function applySeries(entry, info) {
+  if (!info) return entry;
+  entry.series ??= info.series;
+  if (entry.axles == null && info.axles.sure) entry.axles = info.axles.value;
+  if (entry.max_speed == null && info.speed) entry.max_speed = info.speed;
+  entry.series_note = info.axles.sure ? null : `Podle řady ${info.series}: ${info.axles.note ?? 'počet náprav nejde určit'} – zadejte ručně.`;
+  return entry;
+}
+
+/**
+ * Opravené číslo vozu: co se převzalo ze staré řady (oldInfo), se zahodí a doplní podle nového čísla –
+ * nejdřív z paměti vozu (wagon), pak z řady (info). Co vozmistr zadal ručně, zůstane.
+ */
+export function renumberEntry(e, number, wagon, oldInfo, info) {
+  const entered = Object.fromEntries(Object.entries(e.bw ?? {}).filter(([, v]) => v != null));
+  const next = { ...e, number, series: null, series_note: null, bw: { ...(wagon?.bw ?? {}), ...entered } };
+  if (oldInfo?.axles.sure && num(e.axles) === oldInfo.axles.value) next.axles = null;
+  if (oldInfo?.speed && num(e.max_speed) === oldInfo.speed) next.max_speed = null;
+  for (const k of STATIC_KEYS) if (next[k] == null && wagon?.[k] != null) next[k] = wagon[k];
+  // jako u nového vozu: bez ruční brzdy, samočinný přestavovač
+  if (e.hand_brake == null && next.hand_brake === 'nema') next.rucni = 'nema';
+  if (e.load_auto == null && next.load_auto) next.naklad = 'auto';
+  return applySeries(next, info);
 }
 
 /** Údaje vozu, které se uloží k číslu vozu pro příště. */

@@ -10,7 +10,7 @@
 import { html, render, useEffect, useState } from '../vendor/preact-htm.js';
 import { db, persist, migrateHandBrake } from './db.js';
 import { loadOcr } from './ocr.js';
-import { newEntry, uid } from './model.js';
+import { newEntry, applySeries, uid } from './model.js';
 import { seriesInfo } from './series.js';
 import { HAND_BRAKE_OLD } from './fields.js';
 import { Toasts, UpdateBanner, go } from './ui.js';
@@ -23,6 +23,10 @@ import { Scanner } from './views/scanner.js';
 import { Trainer } from './views/trainer.js';
 
 const parse = () => location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+
+// Vůz se právě přidává do výkazu – dvojité ťuknutí na Použít by ho jinak přidalo dvakrát
+// (druhé ťuknutí přijde dřív, než se první vůz uloží).
+let adding = false;
 
 function App() {
   const [path, setPath] = useState(parse());
@@ -75,24 +79,23 @@ function App() {
   if (view === 'skenovat') {
     const position = (n) => { const i = report.entries.findIndex((e) => e.number === n); return i < 0 ? null : i + 1; };
     const onDone = async ({ number, blob }) => {
-      const existing = report.entries.find((e) => e.number === number);
-      if (existing) return go(`#/vykaz/${report.id}/vuz/${existing.id}`, true);
-      const prev = report.entries.at(-1);
-      const entry = newEntry(number, await db.wagon(number), prev, report.to_station);
-      const info = await seriesInfo(number);
-      if (info) {
-        entry.series ??= info.series;
-        if (entry.axles == null && info.axles.sure) entry.axles = info.axles.value;
-        if (entry.max_speed == null && info.speed) entry.max_speed = info.speed;
-        entry.series_note = info.axles.sure ? null : `Podle řady ${info.series}: ${info.axles.note ?? 'počet náprav nejde určit'} – zadejte ručně.`;
+      if (adding) return;
+      adding = true;
+      try {
+        const existing = report.entries.find((e) => e.number === number);
+        if (existing) return go(`#/vykaz/${report.id}/vuz/${existing.id}`, true);
+        const prev = report.entries.at(-1);
+        const entry = applySeries(newEntry(number, await db.wagon(number), prev, report.to_station), await seriesInfo(number));
+        if (blob) {
+          const s = { id: uid(), kind: 'cislo', label: number, blob, wagon: number, created_at: new Date().toISOString() };
+          await db.addSample(s);
+          entry.samples.push(s.id);
+        }
+        await save({ ...report, entries: [...report.entries, entry] });
+        go(`#/vykaz/${report.id}/vuz/${entry.id}`, true);
+      } finally {
+        adding = false;
       }
-      if (blob) {
-        const s = { id: uid(), kind: 'cislo', label: number, blob, wagon: number, created_at: new Date().toISOString() };
-        await db.addSample(s);
-        entry.samples.push(s.id);
-      }
-      await save({ ...report, entries: [...report.entries, entry] });
-      go(`#/vykaz/${report.id}/vuz/${entry.id}`, true);
     };
     return html`<${Scanner} onDone=${onDone} onClose=${() => go(`#/vykaz/${report.id}`, true)} position=${position} />`;
   }

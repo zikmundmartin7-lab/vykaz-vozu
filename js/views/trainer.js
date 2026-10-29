@@ -308,7 +308,8 @@ export function Trainer({ onClose }) {
         : null;
       const tare = pick(v.main, found?.value);
       const handT = pick(v.t, t?.value);
-      const frameValue = pick(v.color, found ? (t ? color?.value : 'nema') : null);
+      // „Nemá“ se nepředvolí: nepřečtená hodnota v t (odlesk, useknutý nápis) neznamená, že vůz ruční brzdu nemá
+      const frameValue = pick(v.color, found && t ? color?.value : null);
       setCand(found ? { ...found, stable: tare === found.value } : null);
       setCand2(t);
       setFrameColor(color);

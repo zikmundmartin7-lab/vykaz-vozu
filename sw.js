@@ -2,9 +2,12 @@
 // nová verze se stáhne celá znovu přímo z webu a otevřeným oknům se ohlásí („Je k dispozici nová verze“).
 // Velké soubory (neuronové sítě, ONNX runtime) jsou ve vlastní zásobě MODELS, aby se při každé nové verzi
 // aplikace nestahovalo znovu 25 MB. Při změně čtecích sítí zvýšit MODELS.
+// Sítě na přestavovače (models/brzdy.json, názvy s razítkem) mají zásobu BRAKE: novou verzi aplikace přečkají,
+// instalace nové verze stáhne ty, které brzdy.json uvádí, a smaže už neuvedené.
 
-const CACHE = 'vykaz-v20'; // zvýšit spolu s APP_VERSION v js/version.js
+const CACHE = 'vykaz-v21'; // zvýšit spolu s APP_VERSION v js/version.js
 const MODELS = 'vykaz-modely-v1';
+const BRAKE = 'vykaz-prestavovace';
 
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css', 'js/version.js',
@@ -21,6 +24,22 @@ const BIG = ['vendor/ort/ort.wasm.min.mjs', 'vendor/ort/ort-wasm-simd-threaded.m
 const SHELL_KEYS = new Map(SHELL.map((u) => { const x = new URL(u, location.href); return [x.pathname, x.href]; }));
 const isBig = (url) => (url.pathname.includes('/models/') && !url.pathname.endsWith('brzdy.json'))
   || url.pathname.includes('/vendor/ort/');
+const BIG_PATHS = new Set(BIG.map((p) => new URL(p, location.href).pathname));
+const isBrake = (url) => url.pathname.includes('/models/') && url.pathname.endsWith('.onnx') && !BIG_PATHS.has(url.pathname);
+
+// Sítě na přestavovače podle aktuálního models/brzdy.json: chybějící stáhnout, neuvedené smazat.
+// Bez signálu (brzdy.json se nestáhne) se nemění nic.
+async function syncBrakeModels(stamp) {
+  const res = await fetch(`models/brzdy.json?sw=${stamp}`, { cache: 'no-store' }).catch(() => null);
+  if (!res?.ok) return;
+  const cfg = await res.json().catch(() => null);
+  if (!cfg) return;
+  const files = Object.values(cfg).map((c) => new URL(`models/${c.file}`, location.href).href);
+  const cache = await caches.open(BRAKE);
+  const want = new Set(files.map((u) => new URL(u).pathname));
+  for (const req of await cache.keys()) if (!want.has(new URL(req.url).pathname)) await cache.delete(req);
+  await Promise.all(files.map(async (u) => { if (!(await cache.match(u))) await cache.add(u).catch(() => {}); }));
+}
 
 // Nová verze: stáhnout všechny soubory aplikace znovu přímo z webu. Jedinečný parametr v adrese obejde
 // mezipaměť prohlížeče i serverů GitHubu – jinak by se k nové verzi mohly uložit soubory ze staré.
@@ -38,6 +57,7 @@ self.addEventListener('install', (e) => {
     // Sítě se stáhnou hned při první instalaci; když to nevyjde (slabý signál), stáhnou se při prvním použití.
     const models = await caches.open(MODELS);
     await Promise.all(BIG.map(async (p) => { if (!(await models.match(p))) await models.add(p).catch(() => {}); }));
+    await syncBrakeModels(stamp);
     await self.skipWaiting();
   })());
 });
@@ -52,12 +72,12 @@ self.addEventListener('message', (e) => {
 // sítě skeneru čísla) sdílí – dřív je každá aktualizace Výkazu smazala.
 self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
-    const old = (await caches.keys()).filter((k) => k.startsWith('vykaz-') && k !== CACHE && k !== MODELS);
+    const old = (await caches.keys()).filter((k) => k.startsWith('vykaz-') && ![CACHE, MODELS, BRAKE].includes(k));
     await Promise.all(old.map((k) => caches.delete(k)));
-    // ze zásoby sítí vyhodit soubory, které už aplikace nepoužívá (např. dřívější anglický model)
+    // ze zásoby sítí vyhodit soubory, které už aplikace nepoužívá (např. dřívější anglický model);
+    // sítě na přestavovače jsou v BRAKE a uklízí je syncBrakeModels
     const models = await caches.open(MODELS);
-    const keep = new Set(BIG.map((p) => new URL(p, location.href).pathname));
-    for (const req of await models.keys()) if (!keep.has(new URL(req.url).pathname)) await models.delete(req);
+    for (const req of await models.keys()) if (!BIG_PATHS.has(new URL(req.url).pathname)) await models.delete(req);
     await self.clients.claim();
     if (old.length) {
       for (const c of await self.clients.matchAll({ type: 'window' })) c.postMessage({ type: 'updated' });
@@ -72,7 +92,7 @@ self.addEventListener('fetch', (e) => {
   // Velké soubory: jednou stáhnout a pak jen z paměti telefonu
   if (isBig(url)) {
     e.respondWith((async () => {
-      const cache = await caches.open(MODELS);
+      const cache = await caches.open(isBrake(url) ? BRAKE : MODELS);
       const hit = await cache.match(e.request, { ignoreSearch: true });
       if (hit) return hit;
       const res = await fetch(e.request);
