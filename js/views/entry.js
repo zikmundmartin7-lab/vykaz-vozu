@@ -4,8 +4,8 @@
 
 import { html, useEffect, useRef, useState } from '../../vendor/preact-htm.js';
 import {
-  SWITCHES, BRAKE_WEIGHTS, BLOCKS, WAGON_FIELDS, optionLabel, bwFor, entryMassKg, trackClass, ridFromLines,
-  wagonFromEntry, formatNumber, fmt, uid, toJpeg, isCompleteNumber,
+  SWITCHES, BRAKE_WEIGHTS, BRAKE_WEIGHTS_HALF, BLOCKS, WAGON_FIELDS, optionLabel, bwFor, wantedLoad, entryMassKg, trackClass,
+  ridFromLines, wagonFromEntry, formatNumber, fmt, num, uid, toJpeg, isCompleteNumber,
 } from '../model.js';
 import { db } from '../db.js';
 import { readText } from '../ocr.js';
@@ -42,6 +42,30 @@ function numbersFromLines(lines) {
   }
   // nejdřív hodnoty s jednotkou – ty bývají to podstatné
   return out.sort((a, b) => Boolean(b.unit) - Boolean(a.unit));
+}
+
+// Přestavovač prázdný/ložený: podle čeho se počítá brzdicí váha a zda poloha odpovídá dopravní hmotnosti (čl. 285, 288).
+function loadHint(e) {
+  const t = (v) => `${fmt(v)} t`;
+  const kg = entryMassKg(e);
+  const mass = kg === null ? '' : ` (dopravní hmotnost ${t(kg / 1000)})`;
+  if (e.naklad === 'auto') {
+    if (num(e.bw_max) !== null) {
+      return html`<div class="hint">Samočinné brzdění podle nákladu: brzdicí váha = dopravní hmotnost, nejvýš <b>MAX ${t(e.bw_max)}</b> pro G i P${mass}.</div>`;
+    }
+    if (num(e.change_t) !== null) {
+      return html`<div class="hint">Samočinný přestavovač: pod přestavnou hmotností ${t(e.change_t)} platí brzdicí váha prázdný, od ní ložený${mass}.</div>`;
+    }
+    return html`<div class="hint">Bez přestavné hmotnosti a MAX se počítá brzdicí váha ložený – doplňte je z nápisu na voze.</div>`;
+  }
+  const want = wantedLoad(e);
+  const change = `${t(e.change_t)}${num(e.change2_t) !== null ? ` / ${t(e.change2_t)}` : ''}`;
+  if (want && want !== e.naklad) {
+    return html`<div class="hint err"><b>⚠ Přestavovač má být v poloze ${optionLabel('naklad', want)}</b> – dopravní hmotnost ${t(kg / 1000)}, přestavná hmotnost ${change}.</div>`;
+  }
+  if (want) return html`<div class="hint">Poloha odpovídá dopravní hmotnosti ${t(kg / 1000)} (přestavná hmotnost ${change}).</div>`;
+  if (num(e.change_t) !== null) return html`<div class="hint">Přestavná hmotnost ${change} – po zadání nákladu aplikace zkontroluje polohu.</div>`;
+  return null;
 }
 
 // Převod hodnoty z nápisu na jednotku pole (t ↔ kg).
@@ -182,6 +206,7 @@ export function EntryView({ report, entryId, save }) {
   }
 
   const massKg = entryMassKg(e);
+  const half = e.naklad === 'polo' || e.bw?.P_polo != null || e.bw?.G_polo != null || e.change2_t != null;
   const tc = trackClass(e);
   const thumbs = (kind) => photos.filter((s) => s.kind === kind);
   const thumbRow = (kind) => thumbs(kind).length > 0 && html`<div class="thumbs">
@@ -217,6 +242,7 @@ export function EntryView({ report, entryId, save }) {
         ${pred[kind] && html`<div class="hint"><${Icon} name="brain" size=${14} /> Síť z fotky: <b>${optionLabel(kind, pred[kind].label)}</b>
           (${Math.round(pred[kind].prob * 100)} %)${pred[kind].label !== e[kind] ? ' – opraveno ručně' : ''}</div>`}
         ${!models[kind] && thumbs(kind).length > 0 && html`<div class="hint">Síť pro tento přestavovač se teprve učí – fotky se ukládají s polohou, kterou zvolíte.</div>`}
+        ${kind === 'naklad' && loadHint(e)}
         ${kind === 'kohout' && e.kohout === 'vypnuta' && html`<div class="hint">Brzdicí váha se ve výkazu proškrtne.</div>`}
         ${kind === 'rucni' && e.rucni !== 'nema' && html`<label class="check">
           <input type="checkbox" checked=${e.hand_checked} onChange=${(ev) => update({ hand_checked: ev.target.checked })} />
@@ -253,8 +279,11 @@ export function EntryView({ report, entryId, save }) {
         <div class="hint">${BLOCKS.find(([v]) => v === e.blocks)?.[2] ?? 'K, L, LL nekovové špalíky · D kotoučová brzda · F litinové špalíky'}</div>
         <div class="field-title">52. Brzdicí váhy z nápisu (t)</div>
         <div class="grid2">
-          ${BRAKE_WEIGHTS.map(([key, label]) => html`<${NumField} label=${label} unit="t" value=${e.bw?.[key]}
+          ${[...BRAKE_WEIGHTS, ...(half ? BRAKE_WEIGHTS_HALF : [])].map(([key, label]) => html`<${NumField} label=${label} unit="t" value=${e.bw?.[key]}
             onFocus=${() => setFocus({ key: `bw.${key}`, unit: 't' })} onChange=${(v) => setBw(key, v)} />`)}
+          ${[['change_t', half ? 'Přestavná prázdný → ½' : 'Přestavná hmotnost'], ...(half ? [['change2_t', 'Přestavná ½ → ložený']] : []),
+            ['bw_max', 'MAX (samočinný)']].map(([key, label]) => html`<${NumField} label=${label} unit="t" value=${e[key]}
+            onFocus=${() => setFocus({ key, unit: 't' })} onChange=${(v) => update({ [key]: v })} />`)}
         </div>
         ${thumbRow('napis')}
         <p class="hint">Údaje vozu se zapamatují podle čísla a příště se vyplní samy.</p>
@@ -288,7 +317,8 @@ export function EntryView({ report, entryId, save }) {
           <div class="stat"><b>${tc ?? '?'}</b><span>traťová třída</span></div>
         </div>
         ${e.kohout !== 'vypnuta' && bwFor(e, e.rezim) === null
-          && html`<p class="hint err">Chybí brzdicí váha pro ${e.rezim} ${e.naklad === 'prazdny' ? 'prázdný' : 'ložený'}.</p>`}
+          && html`<p class="hint err">${e.naklad === 'auto' && num(e.bw_max) !== null ? 'Brzdicí váha se spočítá z dopravní hmotnosti – chybí hmotnost vozu.'
+            : `Chybí brzdicí váha pro ${e.rezim} ${optionLabel('naklad', e.naklad).toLowerCase()}.`}</p>`}
         <div class="field-title">58. Traťová třída</div>
         <${Seg} value=${e.track_class ?? 'auto'} options=${[['auto', 'Spočítat'], ['A', 'A'], ['B', 'B'], ['C', 'C'], ['D', 'D']]}
           onChange=${(v) => update({ track_class: v === 'auto' ? null : v })} />

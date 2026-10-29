@@ -2,7 +2,7 @@
 // Zatím pravidla (jednotka + rozsah hodnot + klíčová slova); potvrzené příklady z tréninku
 // poslouží k natrénování sítě, která pozná, který nápis je který údaj.
 
-import { numberCandidates, digitsOnly, formatNumber, isCompleteNumber, BLOCKS } from './model.js';
+import { numberCandidates, digitsOnly, formatNumber, isCompleteNumber, BLOCKS, LOAD_POSITIONS } from './model.js';
 import { buffersAround, hull } from './frame.js';
 
 /**
@@ -26,8 +26,9 @@ export const HAND_T = { key: 'hand_t', title: 'Síla zajišťovací brzdy', type
 /**
  * Kroky tréninku ve výchozím pořadí obchůzky (vozmistr si ho může přetažením změnit, viz trainer.js).
  * type: number = číslo vozu, qty = číslo s jednotkou, switch = volba tlačítkem (přestavovače, nápravy, špalíky),
- * text = volný text, weight = hmotnost + ruční brzda z jednoho rámečku.
- * wagonKey = kam se hodnota uloží k vozu (numeric = jako číslo), default = předvolená volba,
+ * text = volný text, weight = hmotnost + ruční brzda z jednoho rámečku,
+ * loadbrake = poloha přestavovače prázdný/ložený tlačítkem + brzdicí váhy a přestavná hmotnost z nápisu.
+ * wagonKey = kam se hodnota uloží k vozu (numeric = jako číslo), default = předvolená volba, bad = volba červeně,
  * derived = údaj nemá vlastní krok ani snímek: odvodí se z jiného kroku a vozmistr ho potvrdí v něm.
  */
 export const FIELDS = [
@@ -44,8 +45,13 @@ export const FIELDS = [
   { key: 'blocks', title: 'Druh brzdových špalíků', short: 'Špalíky', hint: 'K, L, LL nekovové · D kotoučová brzda · F litinové', type: 'switch',
     options: BLOCKS.map(([v, l]) => [v, l]), wagonKey: 'blocks' },
   { key: 'rezim', title: 'Přestavovač G/P', short: 'G/P', hint: 'páka režimu brzdění', type: 'switch', options: [['G', 'G'], ['P', 'P']], default: 'P' },
-  { key: 'naklad', title: 'Přestavovač prázdný / ložený', short: 'Prázdný/ložený', hint: 'páka prázdný – ložený', type: 'switch',
-    options: [['prazdny', 'Prázdný'], ['lozeny', 'Ložený'], ['auto', 'Samočinný']], default: 'prazdny' },
+  { key: 'naklad', title: 'Přestavovač prázdný / ložený', short: 'Prázdný/ložený', type: 'loadbrake',
+    hint: 'štítek u páky: nahoře brzdicí váhy, dole přestavná hmotnost; samočinný: „MAX … t“',
+    options: LOAD_POSITIONS, default: 'prazdny' },
+  // vypínací ústrojí brzdy (čl. 571): červená rukojeť svisle dolů = zapnuto, přibližně vodorovně = vypnuto
+  { key: 'kohout', title: 'Páka vypnutí brzdy', short: 'Vypnutí brzdy', type: 'switch',
+    hint: 'červená rukojeť: svisle dolů = zapnuto, vodorovně = vypnuto',
+    options: [['zapnuta', 'Zapnuta'], ['vypnuta', 'Vypnuta']], default: 'zapnuta', bad: ['vypnuta'] },
   { key: 'revize', title: 'Revize', short: 'Revize', type: 'revision', wagonKey: 'revision',
     hint: '1. rámeček = počet let, poslední rámeček = datum, případně volně „+3 M“' },
 ];
@@ -266,6 +272,143 @@ export function extractHandT(lines, tare) {
   return extractField(HAND_T, lines);
 }
 
+// ───── Brzdicí váhy u přestavovače prázdný / ložený (předpis příl. 2, čl. 285, 288, 562, 567) ─────
+// Ruční přestavovač P-L a P-½L-L: štítek u páky, nahoře v okénkách brzdicí váhy u poloh kliky (zleva prázdný,
+// ½ ložený, ložený), pod nimi „BRZDÍCÍ VÁHA“ / „Bremsgewicht“, dole mezi polohami přestavná hmotnost
+// („PŘESTAV. 30 HMOT.“, „Umstell 44 Gewicht“; u P-½L-L dvě). Čísla jsou bez jednotky (t).
+// Samočinný přestavovač P-L: nápis na skříni „00 t  00 t“ (prázdný, ložený), pod nimi „00 t“ (přestavná hmotnost).
+// Samočinné brzdění podle nákladu: „KE-GP-A  MAX: 58 t“ = nejvyšší brzdicí váha pro G i P.
+
+/** Údaje u přestavovače: brzdicí váhy prázdný / ½ ložený / ložený, přestavné hmotnosti, MAX (vše v t). */
+export const LOAD_KEYS = ['empty', 'half', 'loaded', 'change', 'change2', 'max'];
+export const LOAD_LABELS = {
+  empty: 'BV prázdný', half: 'BV ½ ložený', loaded: 'BV ložený', change: 'přestavná hmotnost', change2: 'přestavná ½ → ložený', max: 'BV MAX',
+};
+
+const BW_WORD = /emsg|msgew|brzd|v[áa]h/i;                // „Bremsgewicht“, „BRZDÍCÍ VÁHA“ (síť čte i „remsgewicht“, „Mmsgewicht“)
+const CHANGE_WORD = /umst|mstel|p[řr]est|hmot/i;          // „Umstell … Gewicht“, „PŘESTAV. … HMOT.“
+const POS_WORD = /leer|^\W?.el\.?$|pr[áa]zd|lo[žz]en/i;   // polohy kliky „Leer“ / „Bel.“, „PRÁZDNÝ“ / „LOŽENÝ“
+const MAX_BW = /MAX\s*[.:]?\s*(\d{2,3})\s*t/i;
+const LOAD_BRAKE = /\b[A-Z][A-Za-z]{0,2}\s?-\s?[GPR]{1,3}\s?-\s?A\b/;   // KE-GP-A, DK-GP-A: samočinné brzdění podle nákladu
+const BW_RANGE = (v) => v >= 5 && v <= 200;
+
+// Celá čísla na štítku s polohou v obraze. Sousední okénka síť občas slije do jednoho slova:
+// „2751“ = 27 a 51, „26158“ = 26 | 58 (svislá hrana okénka přečtená jako 1), „213060“ = 21, 30, 60.
+function plateTokens(lines) {
+  const out = [];
+  lines.forEach((l, li) => {
+    const text = zeros(l.text);
+    for (const m of text.matchAll(/\d+/g)) {
+      const d = m[0];
+      const parts = d.length === 4 ? [d.slice(0, 2), d.slice(2)]
+        : d.length === 5 && d[2] === '1' ? [d.slice(0, 2), d.slice(3)]
+          : d.length === 6 ? [d.slice(0, 2), d.slice(2, 4), d.slice(4)]
+            : d.length <= 3 ? [d] : [];
+      parts.forEach((p, k) => {
+        const at = (m.index + ((k + 0.5) * d.length) / parts.length) / text.length;
+        out.push({ v: Number(p), li, x: l.x + l.w * at, cy: l.y + l.h / 2, row: l.row ?? 0 });
+      });
+    }
+  });
+  return out.filter((t) => BW_RANGE(t.v));
+}
+
+/** Čísla z jednoho nápisu (ťuknutí na rámeček): [27, 51], [44], u „MAX: 58 t“ { max: 58 }. */
+export function loadNumbers(text) {
+  const m = zeros(text).match(MAX_BW);
+  return m ? { max: Number(m[1]) } : plateTokens([{ text, x: 0, y: 0, w: 1, h: 1 }]).map((t) => t.v);
+}
+
+// Štítek ručního přestavovače: brzdicí váhy = řada 2–3 rostoucích čísel nad nápisem „Bremsgewicht“ (nebo nad
+// slovy poloh / přestavné hmotnosti), přestavná hmotnost = číslo v řádku „Umstell … Gewicht“, jinak pod nápisem.
+function extractPlate(lines) {
+  const words = lines.map((l, i) => [l, i]).filter(([l]) => BW_WORD.test(l.text) || CHANGE_WORD.test(l.text) || POS_WORD.test(l.text.trim()));
+  if (!words.length) return null;
+  const bwWord = words.find(([l]) => BW_WORD.test(l.text) && !CHANGE_WORD.test(l.text))?.[0];
+  const ref = bwWord ?? hull(words.map(([l]) => l));
+  const wh = Math.min(...words.map(([l]) => l.th ?? l.h));
+  const top = bwWord ? bwWord.y + bwWord.h / 2 : Math.min(...words.map(([l]) => l.y + l.h / 2));
+  const span = Math.max(ref.w, wh * 4) * 0.6;
+  const inside = (t) => t.x > ref.x - span && t.x < ref.x + ref.w + span;
+  const toks = plateTokens(lines).filter(inside);
+  const out = { values: {}, at: {} };
+  // brzdicí váhy: nejbližší řada nad nápisem se 2–3 rostoucími čísly (zleva prázdný, ½ ložený, ložený)
+  const above = toks.filter((t) => t.cy < top - wh * 0.3 && t.cy > top - wh * 7);
+  const rows = [...new Set(above.map((t) => t.row))].sort((a, b) => b - a);
+  for (const r of rows) {
+    const row = above.filter((t) => t.row === r).sort((a, b) => a.x - b.x);
+    if (row.length < 2 || row.length > 3 || row.some((t, i) => i && t.v <= row[i - 1].v)) continue;
+    const keys = row.length === 3 ? ['empty', 'half', 'loaded'] : ['empty', 'loaded'];
+    keys.forEach((k, i) => { out.values[k] = row[i].v; out.at[k] = [row[i].li]; });
+    break;
+  }
+  // přestavná hmotnost: v řádku se slovem „Umstell“ / „PŘESTAV.“, jinak pod nápisem; vyšší než brzdicí váha prázdný
+  const used = new Set(Object.values(out.at).flat());
+  const changeRows = new Set(words.filter(([l]) => CHANGE_WORD.test(l.text)).map(([l]) => l.row));
+  const plausible = (t) => !used.has(t.li) && (out.values.empty == null || t.v > out.values.empty);
+  const below = toks.filter((t) => plausible(t) && t.cy > top + wh * 0.3 && t.cy < top + wh * 9);
+  const inRow = toks.filter((t) => plausible(t) && changeRows.has(t.row));
+  const firstRow = Math.min(...below.map((t) => t.row));
+  const cands = (inRow.length ? inRow : below.filter((t) => t.row === firstRow)).sort((a, b) => a.x - b.x);
+  if (cands.length === 2 && cands[0].v < cands[1].v && (out.values.half != null || out.values.empty == null)) {
+    out.values.change = cands[0].v; out.at.change = [cands[0].li];
+    out.values.change2 = cands[1].v; out.at.change2 = [cands[1].li];
+  } else if (cands.length) {
+    // u P-L je jen jedna – uprostřed štítku
+    const mid = ref.x + ref.w / 2;
+    const c = cands.reduce((a, b) => (Math.abs(b.x - mid) < Math.abs(a.x - mid) ? b : a));
+    out.values.change = c.v; out.at.change = [c.li];
+  }
+  return Object.keys(out.values).length ? out : null;
+}
+
+// Nápis samočinného přestavovače P-L na skříni: dvě hodnoty s t vedle sebe, pod nimi jedna (přestavná hmotnost).
+function extractAutoTable(lines) {
+  const qs = quantities(lines).filter((q) => q.unit === 't' && BW_RANGE(q.v))
+    .map((q, k) => ({ ...q, row: lines[q.li[0]].row ?? 0, x: lines[q.li[0]].x + k * 1e-3 }));
+  for (const r of [...new Set(qs.map((q) => q.row))].sort((a, b) => a - b)) {
+    const pair = qs.filter((q) => q.row === r).sort((a, b) => a.x - b.x);
+    if (pair.length !== 2 || pair[0].v >= pair[1].v) continue;
+    const out = { values: { empty: pair[0].v, loaded: pair[1].v }, at: { empty: pair[0].li, loaded: pair[1].li }, auto: true };
+    const ch = qs.filter((q) => q.row > r && q.v > pair[0].v).sort((a, b) => a.row - b.row)[0];
+    if (ch) { out.values.change = ch.v; out.at.change = ch.li; }
+    return out;
+  }
+  return null;
+}
+
+/**
+ * Brzdicí váhy u přestavovače prázdný / ložený z přečtených řádků.
+ * Vrací { values: {empty, half, loaded, change, change2, max} (t), at: klíč → indexy řádků, lines (všechny),
+ * auto (nápis samočinného přestavovače / brzdění podle nákladu) } nebo null.
+ */
+export function extractLoadBrake(lines) {
+  let found = null;
+  for (const p of phrases(lines)) {
+    const m = zeros(p.text).match(MAX_BW);
+    if (m && BW_RANGE(Number(m[1]))) { found = { values: { max: Number(m[1]) }, at: { max: p.li }, auto: true }; break; }
+  }
+  found ??= extractPlate(lines) ?? extractAutoTable(lines);
+  const designation = lines.findIndex((l) => LOAD_BRAKE.test(l.text));
+  if (designation >= 0) {
+    found ??= { values: {}, at: {} };
+    found.auto = true;
+    found.at.designation = [designation];
+  }
+  if (!found) return null;
+  return { ...found, auto: Boolean(found.auto), lines: [...new Set(Object.values(found.at).flat())] };
+}
+
+/** Přečtené údaje u přestavovače k zobrazení: „BV 27 / 51 t · přestavná 44 t“, „MAX 58 t“. */
+export function formatLoad(lb) {
+  if (!lb) return '';
+  const n = (v) => Number(v).toLocaleString('cs-CZ', { maximumFractionDigits: 1 });
+  const bw = [lb.empty, lb.half, lb.loaded].filter((v) => v != null);
+  const ch = [lb.change, lb.change2].filter((v) => v != null);
+  return [lb.max != null && `MAX ${n(lb.max)} t`, bw.length && `BV ${bw.map(n).join(' / ')} t`,
+    ch.length && `přestavná ${ch.map(n).join(' / ')} t`].filter(Boolean).join(' · ');
+}
+
 /** Hodnota z řádku i, na který vozmistr ťukl (u čísla s jednotkou i se sousedním rámečkem, např. „23 500“ + „kg“). */
 export function valueFromLine(field, lines, i) {
   const line = lines[i];
@@ -308,13 +451,13 @@ export function displayValue(field, value) {
     const base = `${r.years ? `${r.years} r. od ` : ''}${r.date}${r.ext ? ` +${r.ext} M` : ''}`;
     return st.until ? `${base} → ${st.expired ? 'PROŠLÁ ' : 'do '}${formatDay(st.until)}` : base;
   }
-  if (field.type === 'switch') return field.options.find(([v]) => v === value)?.[1] ?? value;
+  if (field.options) return field.options.find(([v]) => v === value)?.[1] ?? value;
   return value;
 }
 
 /** Řádky, které odpovídají potvrzené hodnotě (pro trénink sítě „který nápis je který údaj“). */
 export function matchingLines(field, lines, value) {
-  if (!value || field.type === 'switch') return [];
+  if (!value || field.type === 'switch' || field.type === 'loadbrake') return [];
   if (field.type === 'number') {
     return lines.map((l, i) => [digitsOnly(l.text), i]).filter(([d]) => d.length >= 2 && value.includes(d)).map(([, i]) => i);
   }

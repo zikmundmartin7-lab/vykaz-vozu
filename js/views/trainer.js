@@ -10,9 +10,10 @@ import { predictSwitch } from '../brake.js';
 import {
   FIELDS, FIELD, HAND_T, HAND_BRAKE, HAND_BRAKE_MEANING, extractField, parseRevision, formatRevision,
   parseRevDate, revisionStatus, formatDay, readRevisionYears, extractHandT, valueFromLine, normalizeValue, isValidValue, displayValue, matchingLines,
+  LOAD_KEYS, extractLoadBrake, loadNumbers, formatLoad,
 } from '../fields.js';
 import { db } from '../db.js';
-import { uid, formatNumber, isValidCheckDigit, digitsOnly } from '../model.js';
+import { uid, formatNumber, isValidCheckDigit, digitsOnly, loadBrakeToWagon } from '../model.js';
 import { Icon, Seg, PhotoButton, vibrate, toast } from '../ui.js';
 import { useCameraLight, LightButtons, BrightnessSlider, applyGain } from '../light.js';
 import { handBrakeFrame, hull } from '../frame.js';
@@ -57,6 +58,8 @@ function mapping(el, w, h, mode) {
   return { s, ox: (r.width - w * s) / 2, oy: (r.height - h * s) / 2 };
 }
 
+const dec = (v) => String(v).replace('.', ',');
+
 // Hodnota do pole k úpravě (číslo vozu s mezerami, desetinná čárka).
 function editable(field, value) {
   if (!value) return '';
@@ -85,17 +88,23 @@ const ocrRecord = (f) => ({
 const ORDER_KEY = 'vykaz:trenink-poradi';
 
 // Nápisy, které se sbírají i mimo svůj krok (kamera čte celý záběr a na levém konci vozu bývají u sebe).
-// Přestavovače a špalíky ne – u nich se ukládá snímek z okamžiku volby.
-const CATCH = ['cislo', 'tare', 'hand_kn', 'length', 'speed', 'revize'];
+// Přestavovače a špalíky ne – u nich se ukládá snímek z okamžiku volby. Od přestavovače prázdný/ložený jen
+// nápis samočinného brzdění „KE-GP-A MAX: 58 t“ (bývá uprostřed podélníku u značky špalíků).
+const CATCH = ['cislo', 'tare', 'hand_kn', 'length', 'speed', 'revize', 'naklad'];
 
-// Uložené pořadí kroků; nové kroky z pozdějších verzí se přidají na konec, zrušené vypadnou.
-// Odvozené údaje (nápravy z čísla) vlastní krok nemají.
+// Uložené pořadí kroků; nové kroky z pozdějších verzí se zařadí za krok, za kterým jsou ve výchozím pořadí,
+// zrušené vypadnou. Odvozené údaje (nápravy z čísla) vlastní krok nemají.
 function loadOrder() {
   let saved = [];
   try { saved = JSON.parse(localStorage.getItem(ORDER_KEY) ?? '[]'); } catch {}
   const steps = FIELDS.filter((f) => !f.derived).map((f) => f.key);
-  const known = Array.isArray(saved) ? saved.filter((k) => steps.includes(k)) : [];
-  return [...known, ...steps.filter((k) => !known.includes(k))];
+  const order = Array.isArray(saved) ? saved.filter((k) => steps.includes(k)) : [];
+  for (const [i, k] of steps.entries()) {
+    if (order.includes(k)) continue;
+    const prev = steps.slice(0, i).reverse().find((p) => order.includes(p));
+    order.splice(prev ? order.indexOf(prev) + 1 : 0, 0, k);
+  }
+  return order;
 }
 
 function saveOrder(order) {
@@ -176,7 +185,10 @@ export function Trainer({ onClose }) {
   const [info, setInfo] = useState(null);            // řada vozu podle čísla
   const [axles, setAxles] = useState(null);          // počet náprav, potvrzuje se s číslem vozu
   const [axlesTouched, setAxlesTouched] = useState(false);
-  const [choice, setChoice] = useState(null);        // poloha přestavovače
+  const [choice, setChoice] = useState(() => FIELD[loadOrder()[0]].default ?? null);   // poloha přestavovače
+  const [plate, setPlate] = useState({});            // u přestavovače prázdný/ložený: LOAD_KEYS → text v poli (t)
+  const [plateTouched, setPlateTouched] = useState(false);
+  const plateFocus = useRef(null);                   // pole, do kterého jde ťuknutý nápis s jedním číslem
   const [pred, setPred] = useState(null);
   const [tapped, setTapped] = useState(null);        // index řádku, na který vozmistr ťukl
   const [touched, setTouched] = useState(false);
@@ -190,7 +202,7 @@ export function Trainer({ onClose }) {
   const vote = useRef({ main: votes(), t: votes(), color: votes() });
   const catchVote = useRef({});
   const live = useRef({});
-  live.current = { key: current, frozen, touched, gain: light.gain, info, values };
+  live.current = { key: current, frozen, touched, plateTouched, gain: light.gain, info, values };
 
   const field = current ? FIELD[current] : null;
   const done = !field;
@@ -305,6 +317,17 @@ export function Trainer({ onClose }) {
         if (handT) setInput2(editable(HAND_T, handT));
         if (frameValue) setChoice(frameValue);
       }
+    } else if (f.type === 'loadbrake') {
+      // poloha páky: natrénovaná síť (až bude), samočinný podle nápisu; brzdicí váhy a přestavná hmotnost z nápisu
+      const p = await predictSwitch(f.key, canvas).catch(() => null);
+      const found = extractLoadBrake(lines);
+      const best = Object.fromEntries(LOAD_KEYS.map((k) => [k, pick((v[k] ??= votes()), found?.values[k])]));
+      const pos = pick(v.main, p?.label ?? (found?.auto ? 'auto' : null));
+      setPred(p);
+      setCand(found ? { ...found, stable: LOAD_KEYS.every((k) => found.values[k] == null || best[k] === found.values[k]) } : null);
+      if (pos && !keep()) setChoice(pos);
+      const fill = Object.fromEntries(LOAD_KEYS.filter((k) => best[k] != null).map((k) => [k, dec(best[k])]));
+      if (!live.current.plateTouched && Object.keys(fill).length) setPlate((old) => ({ ...old, ...fill }));
     } else if (f.type === 'revision') {
       const found = await readRevisionYears(extractField(f, lines), canvas, readLine);
       const best = pick(v.main, found?.value);
@@ -330,11 +353,17 @@ export function Trainer({ onClose }) {
     for (const key of CATCH) {
       if (key === stepKey || vals[key] !== undefined) continue;
       const f = FIELD[key];
-      const hit = extractField(f, fr.lines, fr.canvas);
-      // mimo svůj krok jen jisté: číslo s kontrolní číslicí a známým státem, délka mezi symboly nárazníků
-      // (jiná „m“ na voze, např. ložná délka 10,8 m, se jinak nabídnou, když délka přes nárazníky v záběru není)
-      const strict = f.type === 'number' ? hit?.sure : key === 'length' ? hit?.buffers : true;
-      const value = hit && strict ? hit.value : null;
+      let value = null;
+      if (f.type === 'loadbrake') {
+        const max = extractLoadBrake(fr.lines)?.values.max;
+        value = max != null ? formatLoad({ max }) : null;
+      } else {
+        const hit = extractField(f, fr.lines, fr.canvas);
+        // mimo svůj krok jen jisté: číslo s kontrolní číslicí a známým státem, délka mezi symboly nárazníků
+        // (jiná „m“ na voze, např. ložná délka 10,8 m, se jinak nabídnou, když délka přes nárazníky v záběru není)
+        const strict = f.type === 'number' ? hit?.sure : key === 'length' ? hit?.buffers : true;
+        value = hit && strict ? hit.value : null;
+      }
       const box = (catchVote.current[key] ??= votes());
       box.add(value);
       if (value && (single || box.best() === value)) setCaught((old) => ({ ...old, [key]: { value, frame: fr, from: stepKey } }));
@@ -357,7 +386,13 @@ export function Trainer({ onClose }) {
     setInput(f && prev ? editable(f, prev) : '');
     setInput2(vals.hand_t ? editable(HAND_T, vals.hand_t) : '');
     setTouched(prev !== undefined && prev !== null);
-    if (f?.type === 'switch') setChoice(prev ?? f.default ?? null);
+    if (f?.type === 'switch' || f?.type === 'loadbrake') setChoice(prev ?? f.default ?? null);
+    if (f?.type === 'loadbrake') {
+      const lb = vals.lb ?? {};
+      setPlate(Object.fromEntries(LOAD_KEYS.filter((k) => lb[k] != null).map((k) => [k, dec(lb[k])])));
+      setPlateTouched(vals.lb != null);
+      plateFocus.current = null;
+    }
     if (f?.type === 'number') {
       // potvrzený počet, který jen převzal údaj z řady, se dál řídí číslem (oprava čísla → nová řada)
       setAxles(vals.axles ?? null);
@@ -374,7 +409,7 @@ export function Trainer({ onClose }) {
       setFrame(c.frame);
       setFrozen(true);
       // návrh ze zapamatovaného snímku (i barva rámečku, roky revize); stav se překreslí až po tomto volání
-      live.current = { ...live.current, key, frozen: true, touched: false, values: vals };
+      live.current = { ...live.current, key, frozen: true, touched: false, plateTouched: false, values: vals };
       suggest(f, c.frame.canvas, c.frame.lines, true);
     }
   }
@@ -401,6 +436,16 @@ export function Trainer({ onClose }) {
     setTapped(i);
     setTouched(true);
     const text = frame.lines[i].text;
+    if (field.type === 'loadbrake') {
+      // dvě a tři čísla = brzdicí váhy zleva, jedno = do pole, kde je kurzor (jinak první prázdné), MAX = samočinné
+      const n = loadNumbers(text);
+      const one = plateFocus.current ?? ['empty', 'loaded', 'change'].find((k) => !plate[k]) ?? 'change';
+      const fill = n.max != null ? { max: n.max } : n.length >= 3 ? { empty: n[0], half: n[1], loaded: n[2] }
+        : n.length === 2 ? { empty: n[0], loaded: n[1] } : n.length === 1 ? { [one]: n[0] } : {};
+      setPlateTouched(true);
+      setPlate((p) => ({ ...p, ...Object.fromEntries(Object.entries(fill).map(([k, v]) => [k, dec(v)])) }));
+      return;
+    }
     if (field.type === 'revision') {
       const date = text.match(/\d{1,2}\s?\.\s?\d{1,2}\s?\.\s?\d{2,4}/)?.[0];
       const ext = text.match(/\+\s*(\d{1,2})\s*M/i)?.[1];
@@ -449,6 +494,7 @@ export function Trainer({ onClose }) {
 
   async function confirmStep() {
     if (field.type === 'weight') return confirmWeight();
+    if (field.type === 'loadbrake') return confirmLoadBrake();
     if (field.type === 'revision') return confirmRevision();
     const value = field.type === 'switch' ? choice : normalizeValue(field, input);
     if (!isValidValue(field, value)) {
@@ -567,6 +613,44 @@ export function Trainer({ onClose }) {
     goTo(nextKey(next), next);
   }
 
+  // Přestavovač prázdný/ložený: poloha páky (popisek pro síť na přestavovače) a k ní brzdicí váhy, přestavné
+  // hmotnosti a MAX z nápisu (extra). Snímek je ten přečtený, aby k němu patřil text s označenými nápisy.
+  async function confirmLoadBrake() {
+    if (!choice) return toast('Zvolte, v jaké poloze je přestavovač.');
+    const lb = {};
+    for (const k of LOAD_KEYS) {
+      const v = normalizeValue(HAND_T, plate[k] ?? '');
+      if (v) lb[k] = Number(v);
+    }
+    if (lb.empty != null && lb.loaded != null && lb.loaded <= lb.empty) return toast('Brzdicí váha ložený bývá vyšší než prázdný – zkontrolujte hodnoty.');
+    let shot = frame;
+    const video = videoRef.current;
+    if (!shot?.lines.length && !frozen && camera === 'live' && video?.readyState >= 2) {
+      const c = applyGain(grabFrame(video, video.videoWidth, video.videoHeight), light.gain);
+      shot = { canvas: c, lines: [], w: c.width, h: c.height };
+    }
+    if (shot) {
+      const small = shrink(shot);
+      const blob = await new Promise((r) => small.canvas.toBlob(r, 'image/jpeg', 0.82));
+      // označené nápisy: ty, jejichž přečtená hodnota se shoduje s potvrzenou
+      const match_extra = Object.fromEntries(LOAD_KEYS.filter((k) => lb[k] != null && cand?.values[k] === lb[k]).map((k) => [k, cand.at[k]]));
+      await db.addSample({
+        id: uid(), kind: field.key, label: choice, blob, wagon: values.cislo ?? '',
+        created_at: new Date().toISOString(), source: 'trenink',
+        predicted: pred ? { label: pred.label, prob: pred.prob } : cand ? { ...(cand.auto ? { label: 'auto' } : {}), values: cand.values } : null,
+        extra: Object.keys(lb).length ? lb : null,
+        ocr: shot.lines.length ? ocrRecord(small) : null,
+        match: tapped !== null ? [tapped] : [...new Set(Object.values(match_extra).flat())],
+        match_extra,
+      });
+      announce(blob, `${field.title}: ${[displayValue(field, choice), formatLoad(lb)].filter(Boolean).join(' · ')}`);
+    }
+    vibrate(50);
+    const next = { ...values, naklad: choice, lb: Object.keys(lb).length ? lb : null };
+    setValues(next);
+    goTo(nextKey(next), next);
+  }
+
   // Který nápis je potvrzený údaj: ten, na který vozmistr ťukl, jinak řádky se stejnou hodnotou;
   // u revize (opravený text se s přečteným nemusí shodovat) řádek s nápisem REV.
   function matchedLines(value) {
@@ -579,7 +663,8 @@ export function Trainer({ onClose }) {
   }
 
   function skip() {
-    const next = { ...values, [field.key]: null, ...(field.type === 'weight' ? { hand_t: null, hand_brake: null } : {}) };
+    const next = { ...values, [field.key]: null, ...(field.type === 'weight' ? { hand_t: null, hand_brake: null } : {}),
+      ...(field.type === 'loadbrake' ? { lb: null } : {}) };
     setValues(next);
     goTo(nextKey(next), next);
   }
@@ -591,6 +676,7 @@ export function Trainer({ onClose }) {
       if (f.wagonKey && values[f.key] != null) w[f.wagonKey] = f.type === 'qty' || f.type === 'weight' || f.numeric ? Number(values[f.key]) : values[f.key];
     }
     if (values.hand_brake) w.hand_brake = values.hand_brake;
+    if (values.naklad || values.lb) Object.assign(w, loadBrakeToWagon(values.lb, values.naklad, w));
     if (info?.series) w.series = info.series;
     await db.saveWagon(w);
     toast(`Vůz ${formatNumber(values.cislo)} uložen.`);
@@ -622,6 +708,7 @@ export function Trainer({ onClose }) {
       const text = displayValue(f, values[f.key]);
       return revisionStatus(values[f.key]).expired ? html`<span class="err">⚠ ${text}</span>` : text;
     }
+    if (f.type === 'loadbrake') return values.naklad ? [displayValue(f, values.naklad), formatLoad(values.lb)].filter(Boolean).join(' · ') : '—';
     if (f.type !== 'weight') return values[f.key] ? displayValue(f, values[f.key]) : '—';
     if (!values.tare) return '—';
     const hb = HAND_BRAKE_MEANING[values.hand_brake] ?? '';
@@ -670,6 +757,27 @@ export function Trainer({ onClose }) {
       </div>`;
   }
 
+  // Přestavovač prázdný/ložený: poloha páky a brzdicí váhy ze štítku (½ ložený jen u P-½L-L), přestavná hmotnost,
+  // u samočinného brzdění podle nákladu MAX.
+  function loadPanel() {
+    const half = choice === 'polo' || Boolean(plate.half || plate.change2);
+    const grid = `${half ? 'grid3e' : 'grid2'} lbgrid`;
+    const box = (k, label) => html`<label class="field"><span>${label}</span>
+      <input class="input bigvalue" value=${plate[k] ?? ''} inputmode="decimal" placeholder="—"
+        onFocus=${() => { plateFocus.current = k; freeze(); }}
+        onInput=${(e) => { setPlateTouched(true); setPlate((p) => ({ ...p, [k]: e.target.value })); }} /></label>`;
+    return html`<div class="seg4"><${Seg} value=${choice} options=${field.options} onChange=${(v) => { setChoice(v); setTouched(true); }} /></div>
+      <div class="field-title">Brzdicí váha (t) u poloh kliky</div>
+      <div class=${grid}>${box('empty', 'prázdný')}${half && box('half', '½ ložený')}${box('loaded', 'ložený')}</div>
+      <div class=${grid}>${box('change', half ? 'přestavná → ½' : 'přestavná hmotnost')}${half && box('change2', 'přestavná → lož.')}${box('max', half ? 'MAX' : 'MAX (samočinný)')}</div>
+      <div class="hint">
+        ${cand ? html`Aplikace čte: <b>${formatLoad(cand.values) || 'samočinné brzdění podle nákladu'}</b>${cand.stable ? '' : ' (ověřuji…)'}`
+          : 'Namiřte na štítek u páky (nahoře brzdicí váhy, dole přestavná hmotnost), u samočinného na nápis „MAX … t“.'}
+        ${pred && html` · síť: <b>${displayValue(field, pred.label)}</b> (${Math.round(pred.prob * 100)} %)`}
+        ${knownValue && html` · v paměti: ${knownValue}`}
+      </div>`;
+  }
+
   // Počet náprav v kroku čísla: předvolený podle řady, vozmistr ho potvrdí s číslem nebo zvolí jiný.
   // U 8 náprav, „6 a více“, kloubových vozů a neznámé řady nic předvolené není – musí ho spočítat na voze.
   function axlesRow() {
@@ -691,7 +799,9 @@ export function Trainer({ onClose }) {
       </div>`;
   }
 
-  const knownValue = field?.wagonKey && known?.[field.wagonKey] != null ? displayValue(field, String(known[field.wagonKey])) : null;
+  const knownValue = field?.type === 'loadbrake' && known
+    ? formatLoad({ empty: known.bw?.P_prazdny, half: known.bw?.P_polo, loaded: known.bw?.P_lozeny, change: known.change_t, change2: known.change2_t, max: known.bw_max }) || null
+    : field?.wagonKey && known?.[field.wagonKey] != null ? displayValue(field, String(known[field.wagonKey])) : null;
 
   return html`<div class="scanner trainer">
     <div class="view" ref=${viewRef}>
@@ -733,11 +843,11 @@ export function Trainer({ onClose }) {
               <button class="btn ok big" style="flex:2" onClick=${saveWagon}><${Icon} name="check" /> Uložit a další vůz</button>
             </div>`
         : html`
-          ${field.type === 'weight' ? weightPanel() : field.type === 'revision' ? revisionPanel() : field.type === 'switch'
-            ? html`<${Seg} value=${choice} options=${field.options} onChange=${(v) => { setChoice(v); setTouched(true); }} />
+          ${field.type === 'weight' ? weightPanel() : field.type === 'revision' ? revisionPanel() : field.type === 'loadbrake' ? loadPanel() : field.type === 'switch'
+            ? html`<${Seg} value=${choice} options=${field.options} bad=${field.bad} onChange=${(v) => { setChoice(v); setTouched(true); }} />
                 <div class="hint">${pred ? html`Síť odhaduje <b>${displayValue(field, pred.label)}</b> (${Math.round(pred.prob * 100)} %).`
                   : cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>.`
-                  : field.key === 'rezim' || field.key === 'naklad' ? 'Namiřte na páku a zvolte, v jaké je poloze – snímek se uloží pro trénink.'
+                  : field.key === 'rezim' || field.key === 'kohout' ? 'Namiřte na páku a zvolte, v jaké je poloze – snímek se uloží pro trénink.'
                   : 'Namiřte kameru a zvolte tlačítkem – snímek se uloží pro trénink.'}
                   ${knownValue && html` · v paměti: ${knownValue}`}</div>`
             : html`<input class="input bigvalue" value=${input} inputmode=${field.type === 'text' ? 'text' : 'decimal'}

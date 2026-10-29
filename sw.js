@@ -3,7 +3,7 @@
 // Velké soubory (neuronové sítě, ONNX runtime) jsou ve vlastní zásobě MODELS, aby se při každé nové verzi
 // aplikace nestahovalo znovu 25 MB. Při změně čtecích sítí zvýšit MODELS.
 
-const CACHE = 'vykaz-v19'; // zvýšit spolu s APP_VERSION v js/version.js
+const CACHE = 'vykaz-v20'; // zvýšit spolu s APP_VERSION v js/version.js
 const MODELS = 'vykaz-modely-v1';
 
 const SHELL = [

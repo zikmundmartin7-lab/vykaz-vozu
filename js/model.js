@@ -107,6 +107,9 @@ export function numberCandidates(lines) {
 
 // ───── Přestavovače a brzda ─────
 
+/** Polohy přestavovače prázdný – ložený (P-L, P-½L-L) a samočinný (předpis příl. 2, čl. 567, 288). */
+export const LOAD_POSITIONS = [['prazdny', 'Prázdný'], ['polo', '½ ložený'], ['lozeny', 'Ložený'], ['auto', 'Samočinný']];
+
 /** Co vozmistr u vozu nastavuje/kontroluje; pořadí = pořadí na obrazovce. */
 export const SWITCHES = {
   rezim: {
@@ -115,7 +118,7 @@ export const SWITCHES = {
   },
   naklad: {
     title: 'Přestavovač prázdný / ložený', short: 'P/L',
-    options: [['prazdny', 'Prázdný'], ['lozeny', 'Ložený'], ['auto', 'Samočinný']],
+    options: LOAD_POSITIONS,
   },
   kohout: {
     title: 'Brzda (uzavírací kohout)', short: 'Brzda',
@@ -135,6 +138,8 @@ export const BRAKE_WEIGHTS = [
   ['P_prazdny', 'P prázdný'], ['P_lozeny', 'P ložený'],
   ['G_prazdny', 'G prázdný'], ['G_lozeny', 'G ložený'],
 ];
+/** Přestavovač P-½L-L má navíc polohu ½ ložený. */
+export const BRAKE_WEIGHTS_HALF = [['P_polo', 'P ½ ložený'], ['G_polo', 'G ½ ložený']];
 
 /** Kolonka 51 výkazu – druh brzdových špalíků. */
 export const BLOCKS = [
@@ -154,7 +159,10 @@ export const WAGON_FIELDS = [
   ['hand_force_kn', 'Zajišťovací síla', 'kN'],
   ['max_speed', 'Nejv. dovolená rychlost', 'km/h'],
 ];
-const STATIC_KEYS = [...WAGON_FIELDS.map(([k]) => k), 'blocks', 'revision', 'hand_brake', 'series'];
+// change_t = přestavná hmotnost (t) ze štítku přestavovače, u P-½L-L change2_t = mezi ½ ložený a ložený;
+// bw_max = „MAX … t“ u samočinného brzdění podle nákladu; load_auto = vůz má samočinný přestavovač.
+const STATIC_KEYS = [...WAGON_FIELDS.map(([k]) => k), 'blocks', 'revision', 'hand_brake', 'series',
+  'change_t', 'change2_t', 'bw_max', 'load_auto'];
 
 /**
  * Nový vůz ve výkazu: údaje z nápisů z paměti (wagon), polohy přestavovačů a stanice určení
@@ -165,7 +173,8 @@ export function newEntry(number, wagon, prev, toStation = '') {
     id: uid(),
     number,
     rezim: prev?.rezim ?? 'P',
-    naklad: prev?.naklad ?? 'prazdny',
+    // samočinný přestavovač je vlastnost vozu, ruční se převezme od předchozího vozu
+    naklad: wagon?.load_auto ? 'auto' : wagon?.load_auto === false && prev?.naklad === 'auto' ? 'prazdny' : prev?.naklad ?? 'prazdny',
     kohout: 'zapnuta',
     rucni: wagon?.hand_brake === 'nema' ? 'nema' : 'odbrzdena',
     hand_checked: false,
@@ -193,13 +202,53 @@ export const wagonFromEntry = (e) => ({
 export const num = (v) => (v === null || v === undefined || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
 
 /**
- * Kolonka 52: brzdicí váha vozu (t) pro režim P nebo G podle polohy přestavovače prázdný/ložený.
- * Vypnutá brzda → null (pole se ve výkazu proškrtne). Samočinný přestavovač bere hodnotu „ložený“.
+ * Kolonka 52: brzdicí váha vozu (t) pro režim P nebo G podle polohy přestavovače prázdný/ložený (čl. 285:
+ * u ručního jen hodnota u polohy kliky). Vypnutá brzda → null (pole se ve výkazu proškrtne).
+ * Samočinný (čl. 288): s „MAX … t“ dopravní hmotnost, nejvýš MAX (pro G i P; údaje výrobce aplikace nemá);
+ * samočinný přestavovač P-L pod přestavnou hmotností hodnota prázdný, od ní ložený; bez přestavné hmotnosti ložený.
  */
 export function bwFor(e, mode) {
   if (e.kohout === 'vypnuta') return null;
-  const load = e.naklad === 'auto' ? 'lozeny' : e.naklad;
-  return num(e.bw?.[`${mode}_${load}`]);
+  const bw = e.bw ?? {};
+  if (e.naklad !== 'auto') return num(bw[`${mode}_${e.naklad}`]);
+  const kg = entryMassKg(e);
+  if (num(e.bw_max) !== null) return kg === null ? null : Math.min(num(e.bw_max), Math.floor(kg / 1000));
+  if (num(e.change_t) !== null && kg !== null) return num(bw[`${mode}_${kg / 1000 < num(e.change_t) ? 'prazdny' : 'lozeny'}`]);
+  return num(bw[`${mode}_lozeny`]);
+}
+
+/**
+ * Čl. 285: v jaké poloze má být ruční přestavovač – prázdný pod přestavnou hmotností, ložený od ní
+ * (P-½L-L: ½ ložený mezi oběma přestavnými hmotnostmi). null = nejde určit (chybí náklad nebo přestavná hmotnost).
+ */
+export function wantedLoad(e) {
+  const c1 = num(e.change_t);
+  const kg = entryMassKg(e);
+  if (e.naklad === 'auto' || c1 === null || kg === null || num(e.cargo_kg) === null) return null;
+  const t = kg / 1000;
+  const c2 = num(e.change2_t);
+  return t < c1 ? 'prazdny' : c2 !== null && t < c2 ? 'polo' : 'lozeny';
+}
+
+/**
+ * Brzdicí váhy přečtené u přestavovače (lb: empty, half, loaded, change, change2, max) → údaje vozu.
+ * Štítek platí pro G i P (pohyblivá pravítka s různými hodnotami, čl. 567 c), se opraví v kartě vozu);
+ * co se nepřečetlo, zůstane z paměti.
+ */
+export function loadBrakeToWagon(lb, position, old = {}) {
+  const bw = { ...(old.bw ?? {}) };
+  for (const mode of ['G', 'P']) {
+    if (lb?.empty != null) bw[`${mode}_prazdny`] = lb.empty;
+    if (lb?.half != null) bw[`${mode}_polo`] = lb.half;
+    if (lb?.loaded != null) bw[`${mode}_lozeny`] = lb.loaded;
+  }
+  return {
+    bw,
+    change_t: lb?.change ?? old.change_t ?? null,
+    change2_t: lb?.change2 ?? old.change2_t ?? null,
+    bw_max: lb?.max ?? old.bw_max ?? null,
+    load_auto: position ? position === 'auto' : old.load_auto ?? null,
+  };
 }
 
 /** Brzdicí váha vozu ve vlaku (t) podle polohy přestavovače G/P; vypnutá brzda = 0. */

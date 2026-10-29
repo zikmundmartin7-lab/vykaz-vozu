@@ -3,7 +3,7 @@
 
 import { html, useEffect, useState } from '../../vendor/preact-htm.js';
 import { SWITCHES, plural, formatDateTime } from '../model.js';
-import { FIELDS, FIELD, HAND_BRAKE, displayValue } from '../fields.js';
+import { FIELDS, FIELD, HAND_BRAKE, LOAD_LABELS, displayValue } from '../fields.js';
 import { db } from '../db.js';
 import { brakeModels } from '../brake.js';
 import { zip, download } from '../xlsx.js';
@@ -77,7 +77,7 @@ async function buildZip(samples) {
 /** Snímek s rámečky přečtených řádků: zeleně ten, který vozmistr potvrdil jako hledaný údaj. */
 function SampleImage({ s }) {
   const ocr = s.ocr;
-  const hit = new Set([...(s.match ?? []), ...(s.match_extra?.hand_t ?? [])]);
+  const hit = new Set([...(s.match ?? []), ...Object.values(s.match_extra ?? {}).flat()]);
   return html`<div class="sample-img">
     <${BlobImg} blob=${s.blob} />
     ${ocr && html`<svg viewBox=${`0 0 ${ocr.w} ${ocr.h}`} preserveAspectRatio="none" aria-hidden="true">
@@ -115,7 +115,7 @@ function SampleDetail({ s, onClose, onChange }) {
         ${[s.wagon && `vůz ${s.wagon}`, formatDateTime(s.created_at), s.source === 'trenink' ? 'z tréninku' : 'z karty vozu',
           s.exported_at ? 'vyexportováno' : 'zatím neexportováno'].filter(Boolean).join(' · ')}
         ${s.predicted?.label != null && html`<br />Aplikace četla: ${labelText({ ...s, label: s.predicted.label })}`}
-        ${s.extra && html`<br />Navíc: ${Object.entries(s.extra).filter(([, v]) => v != null).map(([k, v]) => `${k} = ${v}`).join(', ')}`}
+        ${s.extra && html`<br />Navíc: ${Object.entries(s.extra).filter(([, v]) => v != null).map(([k, v]) => `${LOAD_LABELS[k] ?? k} = ${v}`).join(', ')}`}
       </p>
       <div class="field-title">Hodnota, na které se síť učí</div>
       ${OPTIONS[s.kind]

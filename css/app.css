@@ -107,6 +107,7 @@ input.input:focus, textarea.input:focus { outline: 2px solid var(--primary); out
 .input-unit em { position: absolute; right: .75rem; top: 50%; transform: translateY(-50%); font-style: normal; color: var(--muted); }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 .75rem; align-items: end; }
 .grid3 { display: grid; grid-template-columns: 1fr 1.5fr 1fr; gap: 0 .5rem; align-items: end; }
+.grid3e { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 .5rem; align-items: end; }
 .field-title { font-size: .85rem; color: var(--muted); margin: .4rem 0 .3rem; }
 label.check { display: flex; align-items: center; gap: .6rem; min-height: 44px; margin: .3rem 0; cursor: pointer; }
 label.check input { width: 22px; height: 22px; flex: none; accent-color: var(--primary); }
@@ -244,6 +245,11 @@ button.chip { cursor: pointer; font-size: .95rem; padding: .35rem .7rem; }
 .ask-title { font-size: 1.3rem; font-weight: 800; line-height: 1.2; }
 .ask-hint { font-size: .9rem; opacity: .9; }
 .input.bigvalue { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* přestavovač prázdný / ložený: čtyři polohy vedle sebe, pole s brzdicími váhami těsněji pod sebou */
+.seg4 .seg { gap: .3rem; }
+.seg4 .seg button { min-height: 46px; font-size: .92rem; padding: 0 .2rem; }
+.lbgrid label.field { margin-bottom: .4rem; }
+.lbgrid.grid3e .input.bigvalue { font-size: 1.15rem; }
 /* počet náprav v kroku čísla vozu */
 .axles-row { display: flex; align-items: center; gap: .4rem; margin-top: .55rem; font-size: .9rem; color: var(--muted); }
 .axles-row .seg { flex: 1; gap: .3rem; }
