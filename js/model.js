@@ -40,14 +40,18 @@ const LOOKALIKE = { O: '0', o: '0', Q: '0', D: '0', I: '1', l: '1', i: '1', '|':
 // tečka jen místo pomlčky před kontrolní číslicí (za trojčíslím) – proto se maže jen tečka za 1–2 číslicemi.
 const DECIMAL = /\b\d+,\d+\b|\b\d{1,2}\.\d+\b/g;
 
+// Kód státu bývá nalepený na značku držitele („80D-DB“, „54CZ-ČDC“) – oddělí se, jinak by se D četlo jako 0.
+const KEEPER = /(\d)(?=\p{Lu}{1,3}-\p{Lu}{2})/gu;
+
 function digitTokens(lines) {
   const tokens = [];
   for (const [li, l] of lines.entries()) {
-    for (const word of l.text.replace(DECIMAL, ' ').split(/[^0-9A-Za-z|!]+/)) {
+    for (const word of l.text.replace(DECIMAL, ' ').replace(KEEPER, '$1 ').split(/[^0-9A-Za-z|!]+/)) {
       const digits = word.replace(/\D/g, '').length;
       if (!digits || digits / word.length < 0.6) continue;
       const d = [...word].map((c) => (/\d/.test(c) ? c : LOOKALIKE[c] ?? '')).join('');
-      tokens.push({ d, li, row: l.row ?? 0, h: l.h ?? 1, conf: l.conf ?? 0 });
+      // výška písma: u narovnaného řádku jeho tloušťka (obdélník šikmého řádku je vyšší než písmo)
+      tokens.push({ d, li, row: l.row ?? 0, h: l.th ?? l.h ?? 1, conf: l.conf ?? 0 });
     }
   }
   return tokens;
@@ -80,10 +84,13 @@ export function numberCandidates(lines) {
   for (let i = 0; i < tokens.length; i++) {
     let all = '';
     const parts = [];
+    const rows = new Set();
     for (let j = i; j < tokens.length && j < i + 8; j++) {
       const t = tokens[j];
-      // části jednoho čísla: nejvýš 3 řádky pod sebou a podobně velké písmo
-      if (t.row - tokens[i].row > 2) break;
+      // části jednoho čísla: nejvýš 3 řádky s číslicemi pod sebou (řádky jen s písmeny – RIV, D-DB, úlomek
+      // „-“ – se nepočítají) a podobně velké písmo
+      if (!rows.has(t.row) && rows.size === 3) break;
+      rows.add(t.row);
       if (Math.max(t.h, tokens[i].h) / Math.min(t.h, tokens[i].h) > 1.8) continue;
       all += t.d;
       parts.push(t);

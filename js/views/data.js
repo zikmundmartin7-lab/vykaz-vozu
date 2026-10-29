@@ -27,7 +27,8 @@ const KINDS = {
 };
 
 // Co sešit training/trenink_prestavovacu.ipynb trénuje: síť na polohu z celé fotky (MIN_FOTEK v sešitu).
-const TRAINED = ['rezim', 'naklad', 'kohout', 'rucni', 'blocks', 'axles'];
+// Nápravy se nefotí (počet je z čísla vozu); starší snímky náprav zůstávají jen v přehledu.
+const TRAINED = ['rezim', 'naklad', 'kohout', 'rucni', 'blocks'];
 const MIN_PHOTOS = 8;
 
 /** Hodnota snímku k zobrazení (poloha, číslo vozu s mezerami, hmotnost s jednotkou…). */

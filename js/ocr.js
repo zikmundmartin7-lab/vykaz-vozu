@@ -79,19 +79,39 @@ async function detect(src, region, maxSide) {
   return findBoxes(prob, w, h).map((b) => {
     const x = Math.max(0, b.x) * sx + region.x;
     const y = Math.max(0, b.y) * sy + region.y;
-    return {
+    const box = {
       x, y,
       w: Math.min(b.x + b.w, w) * sx + region.x - x,
       h: Math.min(b.y + b.h, h) * sy + region.y - y,
       score: b.score,
     };
+    if (b.rot) {
+      // natočený obdélník řádku v souřadnicích zdroje (měřítko detekce se v osách může nepatrně lišit)
+      const { cx, cy, len, thick, angle } = b.rot;
+      const c = Math.cos(angle);
+      const si = Math.sin(angle);
+      box.rot = {
+        cx: cx * sx + region.x, cy: cy * sy + region.y, angle: Math.atan2(si * sy, c * sx),
+        len: len * Math.hypot(c * sx, si * sy), thick: thick * Math.hypot(si * sx, c * sy),
+      };
+      box.angle = box.rot.angle;
+    }
+    return box;
   });
 }
 
+// Natočení řádku se bere v úvahu od 2° do 30° (víc = svislý text nebo samotný znak, ne náklon telefonu).
+const ROT_MIN = (2 * Math.PI) / 180;
+const ROT_MAX = (30 * Math.PI) / 180;
+
 // Souvislé oblasti nad prahem → obdélníky. DB síť text „smrští“, proto se obdélník zase rozšíří (unclip).
+// U protáhlé oblasti se z momentů spočítá i sklon (telefon držený nakřivo, pohled zespodu); takový řádek
+// má navíc rot = natočený obdélník a čte se z narovnaného výřezu – ze šikmého vodorovného výřezu
+// čtecí síť ztrácí znaky na koncích („914-4“ → „14-4“, „18.12.20“ → „18.12.0“).
 function findBoxes(prob, w, h) {
   const seen = new Uint8Array(w * h);
   const stack = new Int32Array(w * h);
+  const pts = new Int32Array(w * h);
   const boxes = [];
   for (let start = 0; start < w * h; start++) {
     if (seen[start] || prob[start] <= DET.thresh) continue;
@@ -99,10 +119,13 @@ function findBoxes(prob, w, h) {
     stack[sp++] = start;
     seen[start] = 1;
     let x0 = w, y0 = h, x1 = 0, y1 = 0, sum = 0, count = 0;
+    let mx = 0, my = 0, mxx = 0, myy = 0, mxy = 0;
     while (sp) {
       const p = stack[--sp];
       const x = p % w;
       const y = (p - x) / w;
+      pts[count] = p;
+      mx += x; my += y; mxx += x * x; myy += y * y; mxy += x * y;
       sum += prob[p];
       count++;
       if (x < x0) x0 = x;
@@ -118,7 +141,41 @@ function findBoxes(prob, w, h) {
     const bh = y1 - y0 + 1;
     if (count < DET.minArea || bh < 3 || sum / count < DET.boxThresh) continue;
     const d = (bw * bh * DET.unclip) / (2 * (bw + bh));
-    boxes.push({ x: x0 - d, y: y0 - d, w: bw + 2 * d, h: bh + 2 * d, score: sum / count });
+    const box = { x: x0 - d, y: y0 - d, w: bw + 2 * d, h: bh + 2 * d, score: sum / count };
+    // sklon hlavní osy oblasti; jen u protáhlých oblastí (řádek textu, ne samotný znak)
+    mx /= count;
+    my /= count;
+    const a = mxx / count - mx * mx;
+    const b = myy / count - my * my;
+    const c = mxy / count - mx * my;
+    const angle = 0.5 * Math.atan2(2 * c, a - b);
+    const l1 = (a + b) / 2 + Math.sqrt(((a - b) / 2) ** 2 + c * c);
+    const l2 = (a + b) / 2 - Math.sqrt(((a - b) / 2) ** 2 + c * c);
+    if (l1 > l2 * 9 && Math.abs(angle) <= ROT_MAX) {
+      box.angle = angle;
+      if (Math.abs(angle) >= ROT_MIN) {
+        const co = Math.cos(angle);
+        const si = Math.sin(angle);
+        let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+        for (let i = 0; i < count; i++) {
+          const px = pts[i] % w - mx;
+          const py = (pts[i] - (pts[i] % w)) / w - my;
+          const u = px * co + py * si;
+          const v = -px * si + py * co;
+          if (u < u0) u0 = u;
+          if (u > u1) u1 = u;
+          if (v < v0) v0 = v;
+          if (v > v1) v1 = v;
+        }
+        const len = u1 - u0 + 1;
+        const thick = v1 - v0 + 1;
+        const e = (len * thick * DET.unclip) / (2 * (len + thick));
+        const uc = (u0 + u1) / 2;
+        const vc = (v0 + v1) / 2;
+        box.rot = { cx: mx + uc * co - vc * si + 0.5, cy: my + uc * si + vc * co + 0.5, len: len + 2 * e, thick: thick + 2 * e, angle };
+      }
+    }
+    boxes.push(box);
   }
   return boxes;
 }
@@ -129,11 +186,35 @@ const REC_H = 48;
 const REC_MIN_W = 320;
 const REC_MAX_W = 1600;
 
+// Narovnaný výřez natočeného řádku (rot z findBoxes) zmenšený na w × h → ImageData.
+function rotatedPixels(src, rot, w, h) {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.imageSmoothingQuality = 'high';
+  g.translate(w / 2, h / 2);
+  g.scale(w / rot.len, h / rot.thick);
+  g.rotate(-rot.angle);
+  g.translate(-rot.cx, -rot.cy);
+  // kreslí se jen okolí řádku, ne celý snímek
+  const r = Math.hypot(rot.len, rot.thick) / 2 + 2;
+  const { w: sw, h: sh } = sourceSize(src);
+  const x0 = Math.max(0, Math.floor(rot.cx - r));
+  const y0 = Math.max(0, Math.floor(rot.cy - r));
+  const x1 = Math.min(sw, Math.ceil(rot.cx + r));
+  const y1 = Math.min(sh, Math.ceil(rot.cy + r));
+  if (x1 > x0 && y1 > y0) g.drawImage(src, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0);
+  return g.getImageData(0, 0, w, h).data;
+}
+
 async function recognize(src, box) {
   const { rec, chars } = models;
-  const w = Math.round(Math.min(REC_MAX_W, Math.max(8, (REC_H * box.w) / box.h)));
+  const bw = box.rot?.len ?? box.w;
+  const bh = box.rot?.thick ?? box.h;
+  const w = Math.round(Math.min(REC_MAX_W, Math.max(8, (REC_H * bw) / bh)));
   const padW = Math.max(REC_MIN_W, Math.ceil(w / 8) * 8);
-  const px = pixels(src, box.x, box.y, box.w, box.h, w, REC_H);
+  const px = box.rot ? rotatedPixels(src, box.rot, w, REC_H) : pixels(src, box.x, box.y, box.w, box.h, w, REC_H);
   const plane = REC_H * padW;
   const input = new Float32Array(3 * plane); // zbytek do šířky padW zůstane 0 = šedá jako při tréninku
   for (let y = 0; y < REC_H; y++) {
@@ -183,7 +264,7 @@ export async function readText(src, { region, maxSide = DET.maxSide } = {}) {
   for (const b of boxes) {
     if (b.w < 4 || b.h < 4) continue;
     const { text, conf } = await recognize(src, b);
-    if (text) lines.push({ text, conf, x: b.x, y: b.y, w: b.w, h: b.h });
+    if (text) lines.push({ text, conf, x: b.x, y: b.y, w: b.w, h: b.h, ...(b.angle != null ? { angle: b.angle } : {}), ...(b.rot ? { th: b.rot.thick } : {}) });
   }
   return sortLines(lines);
 }
@@ -194,21 +275,34 @@ export async function readLine(src, box) {
   return recognize(src, box);
 }
 
-// Seskupení do řádků: obdélníky se svisle překrývají aspoň z poloviny menší výšky.
+// Seskupení do řádků: obdélníky se svisle překrývají aspoň z poloviny menší výšky. Na nakloněném snímku
+// se svislá poloha i pořadí v řádku měří kolmo na převažující sklon řádků (jinak se řádky pod sebou slijí).
 export function sortLines(lines) {
-  const sorted = [...lines].sort((a, b) => a.y + a.h / 2 - (b.y + b.h / 2));
+  const angles = lines.map((l) => l.angle).filter((a) => a != null).sort((a, b) => a - b);
+  const tilt = angles.length ? angles[Math.floor(angles.length / 2)] : 0;
+  const co = Math.cos(tilt);
+  const si = Math.sin(tilt);
+  const at = lines.map((l) => {
+    const cx = l.x + l.w / 2;
+    const cy = l.y + l.h / 2;
+    // výška písma: u narovnaného řádku jeho tloušťka, jinak výška obdélníku zmenšená o vliv sklonu
+    const h = l.th ?? Math.max(4, l.h * co - l.w * Math.abs(si));
+    const v = -cx * si + cy * co;
+    return { l, u: l.x * co + cy * si, y: v - h / 2, h };   // u = levý okraj podél řádku
+  });
+  const sorted = at.sort((a, b) => a.y + a.h / 2 - (b.y + b.h / 2));
   const rows = [];
-  for (const l of sorted) {
+  for (const t of sorted) {
     const row = rows.find((r) => {
-      const overlap = Math.min(r.y + r.h, l.y + l.h) - Math.max(r.y, l.y);
-      return overlap > Math.min(r.h, l.h) * 0.5;
+      const overlap = Math.min(r.y + r.h, t.y + t.h) - Math.max(r.y, t.y);
+      return overlap > Math.min(r.h, t.h) * 0.5;
     });
     if (row) {
-      row.items.push(l);
-      const y0 = Math.min(row.y, l.y);
-      row.h = Math.max(row.y + row.h, l.y + l.h) - y0;
+      row.items.push(t);
+      const y0 = Math.min(row.y, t.y);
+      row.h = Math.max(row.y + row.h, t.y + t.h) - y0;
       row.y = y0;
-    } else rows.push({ y: l.y, h: l.h, items: [l] });
+    } else rows.push({ y: t.y, h: t.h, items: [t] });
   }
-  return rows.flatMap((r, i) => r.items.sort((a, b) => a.x - b.x).map((l) => ({ ...l, row: i })));
+  return rows.flatMap((r, i) => r.items.sort((a, b) => a.u - b.u).map((t) => ({ ...t.l, row: i })));
 }

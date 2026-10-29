@@ -12,7 +12,7 @@ import {
   parseRevDate, revisionStatus, formatDay, readRevisionYears, extractHandT, valueFromLine, normalizeValue, isValidValue, displayValue, matchingLines,
 } from '../fields.js';
 import { db } from '../db.js';
-import { uid, formatNumber, isValidCheckDigit } from '../model.js';
+import { uid, formatNumber, isValidCheckDigit, digitsOnly } from '../model.js';
 import { Icon, Seg, PhotoButton, vibrate, toast } from '../ui.js';
 import { useCameraLight, LightButtons, BrightnessSlider, applyGain } from '../light.js';
 import { handBrakeFrame, hull } from '../frame.js';
@@ -84,11 +84,16 @@ const ocrRecord = (f) => ({
 
 const ORDER_KEY = 'vykaz:trenink-poradi';
 
+// Nápisy, které se sbírají i mimo svůj krok (kamera čte celý záběr a na levém konci vozu bývají u sebe).
+// Přestavovače a špalíky ne – u nich se ukládá snímek z okamžiku volby.
+const CATCH = ['cislo', 'tare', 'hand_kn', 'length', 'speed', 'revize'];
+
 // Uložené pořadí kroků; nové kroky z pozdějších verzí se přidají na konec, zrušené vypadnou.
+// Odvozené údaje (nápravy z čísla) vlastní krok nemají.
 function loadOrder() {
   let saved = [];
   try { saved = JSON.parse(localStorage.getItem(ORDER_KEY) ?? '[]'); } catch {}
-  const steps = FIELDS.map((f) => f.key);
+  const steps = FIELDS.filter((f) => !f.derived).map((f) => f.key);
   const known = Array.isArray(saved) ? saved.filter((k) => steps.includes(k)) : [];
   return [...known, ...steps.filter((k) => !known.includes(k))];
 }
@@ -101,7 +106,7 @@ function saveOrder(order) {
  * Kroky vpravo pod sebou. Ťuknutí = přejít na krok, tah nahoru/dolů = přesunout krok jinam.
  * Všechny položky mají stejnou výšku, cílové místo se tak spočítá z polohy prstu.
  */
-function StepList({ order, current, values, onPick, onReorder }) {
+function StepList({ order, current, values, caught, onPick, onReorder }) {
   const listRef = useRef();
   const drag = useRef(null);
   const [preview, setPreview] = useState(null);
@@ -137,11 +142,13 @@ function StepList({ order, current, values, onPick, onReorder }) {
   return html`<div class="steplist" ref=${listRef}>
     ${items.map((key) => {
       const v = values[key];
-      const state = key === current ? 'on' : v === null ? 'skip' : v !== undefined ? 'ok' : '';
+      const c = v === undefined && key !== current ? caught[key] : null;   // přečteno už při jiném kroku
+      const state = key === current ? 'on' : v === null ? 'skip' : v !== undefined ? 'ok' : c ? 'caught' : '';
       return html`<button type="button" key=${key}
         class=${`stepitem ${state} ${preview && drag.current?.key === key ? 'dragging' : ''}`}
+        title=${c ? `Přečteno: ${displayValue(FIELD[key], c.value)}` : null}
         onPointerDown=${(e) => down(e, key)} onPointerMove=${move} onPointerUp=${up} onPointerCancel=${cancel}>
-        <span class="steplabel">${v !== undefined && v !== null && key !== current ? '✓ ' : ''}${FIELD[key].short}</span>
+        <span class="steplabel">${v !== undefined && v !== null && key !== current ? '✓ ' : c ? '● ' : ''}${FIELD[key].short}</span>
         <span class="grip" aria-hidden="true">⋮⋮</span>
       </button>`;
     })}
@@ -167,18 +174,23 @@ export function Trainer({ onClose }) {
   const [cand2, setCand2] = useState(null);
   const [frameColor, setFrameColor] = useState(null); // { value: cerveny | jiny | null, why }
   const [info, setInfo] = useState(null);            // řada vozu podle čísla
+  const [axles, setAxles] = useState(null);          // počet náprav, potvrzuje se s číslem vozu
+  const [axlesTouched, setAxlesTouched] = useState(false);
   const [choice, setChoice] = useState(null);        // poloha přestavovače
   const [pred, setPred] = useState(null);
   const [tapped, setTapped] = useState(null);        // index řádku, na který vozmistr ťukl
   const [touched, setTouched] = useState(false);
   const [saved, setSaved] = useState(0);
   const [flash, setFlash] = useState(null);          // právě uložený snímek: { url, text, key }
+  const [caught, setCaught] = useState({});          // údaje přečtené mimo svůj krok: klíč → { value, frame, from }
+  const [caughtFrom, setCaughtFrom] = useState(null); // krok, při kterém se přečetl právě zobrazený údaj
   const [busy, setBusy] = useState(false);
   const [, setTick] = useState(0);
   const light = useCameraLight();
   const vote = useRef({ main: votes(), t: votes(), color: votes() });
+  const catchVote = useRef({});
   const live = useRef({});
-  live.current = { key: current, frozen, touched, gain: light.gain, info };
+  live.current = { key: current, frozen, touched, gain: light.gain, info, values };
 
   const field = current ? FIELD[current] : null;
   const done = !field;
@@ -208,12 +220,14 @@ export function Trainer({ onClose }) {
         const { key: k, frozen: fz } = live.current;
         if (fz || !k || video.readyState < 2) { await sleep(150); continue; }
         const c = applyGain(grabFrame(video, video.videoWidth, video.videoHeight, READ_SIDE), live.current.gain);
-        // u přestavovačů a náprav se text nečte (nic v něm nehledáme), jen se snímek předá síti
+        // u přestavovačů se text nečte (nic v něm nehledáme), jen se snímek předá síti
         const needsText = FIELD[k].type !== 'switch' || FIELD[k].key === 'blocks';
         const lines = needsText ? await readText(c).catch(() => []) : [];
         if (stopped || live.current.frozen || live.current.key !== k) continue;
-        setFrame({ canvas: c, lines, w: c.width, h: c.height });
+        const fr = { canvas: c, lines, w: c.width, h: c.height };
+        setFrame(fr);
         await suggest(FIELD[k], c, lines);
+        if (lines.length) collect(k, fr);
         await sleep(needsText ? 60 : 400);
       }
     })();
@@ -235,18 +249,24 @@ export function Trainer({ onClose }) {
     c.getContext('2d').drawImage(frame.canvas, 0, 0);
   }, [frozen, frame]);
 
-  // údaje vozu z paměti a řada podle čísla (jen jako nápověda a předvyplnění)
+  // údaje vozu z paměti (jen jako nápověda)
   useEffect(() => {
     if (values.cislo) db.wagon(values.cislo).then((w) => setKnown(w ?? null));
-    setInfo(null);
-    if (values.cislo) seriesInfo(values.cislo).then(setInfo);
   }, [values.cislo]);
 
-  // počet náprav: jistý údaj z řady se předvyplní, 8 a nejasné případy zadá vozmistr ručně
+  // Řada podle čísla: v kroku čísla z toho, co je právě v poli (nápravy se potvrzují s číslem), jinak
+  // z potvrzeného čísla. Řada závisí jen na 1. a 5.–8. číslici.
+  const number = current === 'cislo' ? digitsOnly(input) : values.cislo ?? '';
   useEffect(() => {
-    if (current === 'axles' && !touched && values.axles === undefined) {
-      setChoice(info?.axles?.sure ? String(info.axles.value) : null);
-    }
+    let off = false;
+    if (number.length >= 8) seriesInfo(number).then((x) => { if (!off) setInfo(x); });
+    else setInfo(null);
+    return () => { off = true; };
+  }, [number.slice(0, 8)]);
+
+  // počet náprav: jistý údaj z řady se předvyplní, 8, „6 a více“ a nejasné případy zvolí vozmistr sám
+  useEffect(() => {
+    if (current === 'cislo' && !axlesTouched) setAxles(info?.axles?.sure ? String(info.axles.value) : null);
   }, [info, current]);
 
   // Návrh hodnoty kroku: u voleb natrénovaná síť (pokud už je), jinak pravidlo nad přečteným textem.
@@ -296,15 +316,34 @@ export function Trainer({ onClose }) {
     } else {
       // rychlost, kterou z nápisů nejde přečíst, se navrhne podle řady (s = 100 km/h, ss = 120 km/h)
       const seriesSpeed = f.key === 'speed' && live.current.info?.speed;
-      const found = extractField(f, lines) ?? (seriesSpeed ? { value: String(seriesSpeed), lines: [], series: true } : null);
+      const found = extractField(f, lines, canvas) ?? (seriesSpeed ? { value: String(seriesSpeed), lines: [], series: true } : null);
       const best = pick(v.main, found?.value);
       setCand(found ? { ...found, stable: best === found.value } : null);
       if (best && !keep()) setInput(editable(f, best));
     }
   }
 
+  // Ostatní nepotvrzené údaje ve stejném snímku: z živé kamery po shodě ve dvou snímcích po sobě, z fotky hned.
+  // Zapamatuje se hodnota i snímek, na kterém je; vozmistr ji potvrdí, až na ni přijde řada (nic se neuloží samo).
+  function collect(stepKey, fr, single = false) {
+    const vals = live.current.values;
+    for (const key of CATCH) {
+      if (key === stepKey || vals[key] !== undefined) continue;
+      const f = FIELD[key];
+      const hit = extractField(f, fr.lines, fr.canvas);
+      // mimo svůj krok jen jisté: číslo s kontrolní číslicí a známým státem, délka mezi symboly nárazníků
+      // (jiná „m“ na voze, např. ložná délka 10,8 m, se jinak nabídnou, když délka přes nárazníky v záběru není)
+      const strict = f.type === 'number' ? hit?.sure : key === 'length' ? hit?.buffers : true;
+      const value = hit && strict ? hit.value : null;
+      const box = (catchVote.current[key] ??= votes());
+      box.add(value);
+      if (value && (single || box.best() === value)) setCaught((old) => ({ ...old, [key]: { value, frame: fr, from: stepKey } }));
+    }
+  }
+
   // Přechod na krok (klíč; null = souhrn vozu). Na už potvrzeném kroku zůstane potvrzená hodnota.
-  function goTo(key, vals = values) {
+  // Údaj přečtený už při jiném kroku se ukáže na zastaveném snímku, kde byl, a čeká na potvrzení.
+  function goTo(key, vals = values, caughtNow = caught) {
     for (const b of Object.values(vote.current)) b.clear();
     setCurrent(key);
     setFrozen(false);
@@ -319,10 +358,24 @@ export function Trainer({ onClose }) {
     setInput2(vals.hand_t ? editable(HAND_T, vals.hand_t) : '');
     setTouched(prev !== undefined && prev !== null);
     if (f?.type === 'switch') setChoice(prev ?? f.default ?? null);
+    if (f?.type === 'number') {
+      // potvrzený počet, který jen převzal údaj z řady, se dál řídí číslem (oprava čísla → nová řada)
+      setAxles(vals.axles ?? null);
+      setAxlesTouched(vals.axles != null && !(info?.axles?.sure && String(info.axles.value) === vals.axles));
+    }
     if (f?.type === 'weight') setChoice(vals.hand_brake ?? null);
     if (f?.type === 'revision') {
       const r = prev ? parseRevision(prev) : null;
       setRev({ years: r?.years ? String(r.years) : '', date: r?.date ?? '', ext: r?.ext ? String(r.ext) : '' });
+    }
+    const c = f && prev === undefined ? caughtNow[key] : null;
+    setCaughtFrom(c?.from ?? null);
+    if (c) {
+      setFrame(c.frame);
+      setFrozen(true);
+      // návrh ze zapamatovaného snímku (i barva rámečku, roky revize); stav se překreslí až po tomto volání
+      live.current = { ...live.current, key, frozen: true, touched: false, values: vals };
+      suggest(f, c.frame.canvas, c.frame.lines, true);
     }
   }
 
@@ -366,9 +419,11 @@ export function Trainer({ onClose }) {
       const bmp = await createImageBitmap(file);
       const c = grabFrame(bmp, bmp.width, bmp.height, READ_SIDE);
       const lines = await readText(c, { maxSide: 1600 });
-      setFrame({ canvas: c, lines, w: c.width, h: c.height });
+      const fr = { canvas: c, lines, w: c.width, h: c.height };
+      setFrame(fr);
       setFrozen(true);
       await suggest(field, c, lines, true);
+      collect(field.key, fr, true);
     } catch (e) {
       toast(`Fotku se nepodařilo přečíst: ${e.message}`);
     }
@@ -401,7 +456,12 @@ export function Trainer({ onClose }) {
       return;
     }
     if (field.type === 'number' && !isValidCheckDigit(value) && !confirmCheck(value)) return;
-    // U voleb (přestavovače, nápravy, špalíky) se uloží snímek z okamžiku potvrzení – přesně to, co je na
+    if (field.type === 'number' && !axles) {
+      vibrate(200);
+      toast('Spočítejte nápravy (dvojkolí) na voze a zvolte jejich počet.');
+      return;
+    }
+    // U voleb (přestavovače, špalíky) se uloží snímek z okamžiku potvrzení – přesně to, co je na
     // displeji. Poslední přečtený snímek může být kvůli čtení textu až sekundu starý a ukazovat jiné místo.
     let shot = frame;
     const video = videoRef.current;
@@ -424,10 +484,10 @@ export function Trainer({ onClose }) {
         ocr: shot.lines.length ? ocrRecord(small) : null,
         match: tapped !== null ? [tapped] : shot === frame ? matchedLines(value) : [],
       });
-      announce(blob, `${field.title}: ${displayValue(field, value)}`);
+      announce(blob, `${field.title}: ${displayValue(field, value)}${field.type === 'number' ? ` · ${axlesText(Number(axles))}` : ''}`);
     }
     vibrate(50);
-    const next = { ...values, [field.key]: value };
+    const next = { ...values, [field.key]: value, ...(field.type === 'number' ? { axles } : {}) };
     setValues(next);
     goTo(nextKey(next), next);
   }
@@ -540,7 +600,9 @@ export function Trainer({ onClose }) {
   function newWagon() {
     setValues({});
     setKnown(null);
-    goTo(order[0], {});
+    setCaught({});
+    catchVote.current = {};
+    goTo(order[0], {}, {});
   }
 
   // rámečky kolem přečtených řádků
@@ -608,6 +670,27 @@ export function Trainer({ onClose }) {
       </div>`;
   }
 
+  // Počet náprav v kroku čísla: předvolený podle řady, vozmistr ho potvrdí s číslem nebo zvolí jiný.
+  // U 8 náprav, „6 a více“, kloubových vozů a neznámé řady nic předvolené není – musí ho spočítat na voze.
+  function axlesRow() {
+    const opts = FIELD.axles.options;
+    const pick = (v) => { setAxles(v); setAxlesTouched(true); };
+    const a = info?.axles;
+    const fromSeries = a?.sure && axles === String(a.value);
+    return html`<div class="axles-row">
+        <span>Nápravy</span>
+        <${Seg} value=${axles} options=${opts} onChange=${pick} />
+        <input class="input" inputmode="numeric" placeholder="jiný" aria-label="Jiný počet náprav" onFocus=${freeze}
+          value=${axles && !opts.some(([v]) => v === axles) ? axles : ''} onInput=${(e) => pick(e.target.value.replace(/\D/g, '') || null)} />
+      </div>
+      <div class=${`hint ${a && !a.sure && !axles ? 'err' : ''}`}>
+        ${!info ? (number.length >= 8 ? 'Řada podle čísla není v tabulkách – spočítejte nápravy a zvolte.' : 'Počet náprav se předvolí podle řady z čísla vozu.')
+          : html`Podle řady <b>${info.series}</b>: ${a.value ? axlesText(a.value) : 'počet nejde určit'}${a.note ? ` (${a.note})` : ''}${
+            a.sure ? (fromSeries ? ' – potvrďte s číslem.' : ' – zvoleno jinak.')
+              : axles ? '.' : html` – <b>spočítejte nápravy na voze a zvolte.</b>`}`}
+      </div>`;
+  }
+
   const knownValue = field?.wagonKey && known?.[field.wagonKey] != null ? displayValue(field, String(known[field.wagonKey])) : null;
 
   return html`<div class="scanner trainer">
@@ -622,17 +705,18 @@ export function Trainer({ onClose }) {
           <div><b>Uloženo pro trénink</b><span>${flash.text}</span></div></div>`}
       <div class="top">
         <button class="iconbtn" onClick=${onClose} aria-label="Zavřít"><${Icon} name="close" /></button>
-        ${frozen && !done && camera === 'live' && html`<button class="btn small" onClick=${() => { setFrozen(false); setTapped(null); }}>
+        ${frozen && !done && camera === 'live' && html`<button class="btn small" onClick=${() => { setFrozen(false); setTapped(null); setCaughtFrom(null); }}>
           <${Icon} name="camera" size=${18} /> Zpět ke kameře</button>`}
         <span class="spacer"></span>
         ${camera === 'live' && html`<${LightButtons} light=${light} />`}
       </div>
       <${BrightnessSlider} light=${light} />
-      <${StepList} order=${order} current=${current} values=${values} onPick=${(k) => goTo(k)} onReorder=${reorder} />
+      <${StepList} order=${order} current=${current} values=${values} caught=${caught} onPick=${(k) => goTo(k)} onReorder=${reorder} />
       ${!done && html`<div class="ask">
         <div class="ask-n">${order.indexOf(current) + 1} / ${order.length} · uloženo snímků: ${saved}${info ? ` · řada ${info.series}` : ''}</div>
         <div class="ask-title">${field.title}</div>
-        <div class="ask-hint">${!ready ? 'Načítám rozpoznávání…' : field.hint}</div>
+        <div class="ask-hint">${!ready ? 'Načítám rozpoznávání…'
+          : caughtFrom ? html`<b>Přečteno už při kroku ${FIELD[caughtFrom].short}</b> – zkontrolujte a potvrďte.` : field.hint}</div>
       </div>`}
     </div>
 
@@ -641,7 +725,8 @@ export function Trainer({ onClose }) {
         ? html`<h2 style="margin-bottom:.5rem">Vůz hotový</h2>
             <ul class="summary">
               ${info && html`<li><span>Řada (podle čísla)</span><b>${info.series}</b></li>`}
-              ${order.map((k) => FIELD[k]).map((f) => html`<li><span>${f.title}</span><b>${summaryValue(f)}</b></li>`)}
+              ${order.flatMap((k) => [FIELD[k], ...FIELDS.filter((f) => f.derived === k)])
+                .map((f) => html`<li><span>${f.title}</span><b>${summaryValue(f)}</b></li>`)}
             </ul>
             <div class="row" style="margin-top:.6rem">
               <button class="btn" style="flex:1" onClick=${() => goTo(order.at(-1))}>Zpět</button>
@@ -650,11 +735,6 @@ export function Trainer({ onClose }) {
         : html`
           ${field.type === 'weight' ? weightPanel() : field.type === 'revision' ? revisionPanel() : field.type === 'switch'
             ? html`<${Seg} value=${choice} options=${field.options} onChange=${(v) => { setChoice(v); setTouched(true); }} />
-                ${field.manual && html`<label class="manual">Jiný počet:
-                  <input class="input" inputmode="numeric" value=${field.options.some(([v]) => v === choice) ? '' : choice ?? ''}
-                    onFocus=${freeze} onInput=${(e) => { setTouched(true); setChoice(e.target.value.replace(/\D/g, '') || null); }} /></label>`}
-                ${field.key === 'axles' && info && html`<div class=${`hint ${info.axles.sure ? '' : 'err'}`}>
-                  Podle řady <b>${info.series}</b>: ${info.axles.value ? axlesText(info.axles.value) : 'počet nejde určit'}${info.axles.note ? ` (${info.axles.note})` : ''}${info.axles.sure ? '' : ' – zkontrolujte na voze a zvolte ručně.'}</div>`}
                 <div class="hint">${pred ? html`Síť odhaduje <b>${displayValue(field, pred.label)}</b> (${Math.round(pred.prob * 100)} %).`
                   : cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>.`
                   : field.key === 'rezim' || field.key === 'naklad' ? 'Namiřte na páku a zvolte, v jaké je poloze – snímek se uloží pro trénink.'
@@ -665,9 +745,10 @@ export function Trainer({ onClose }) {
                   onFocus=${freeze}
                   onInput=${(e) => { setTouched(true); setInput(field.type === 'number' ? formatNumber(e.target.value) : e.target.value); }} />
                 <div class="hint">
-                  ${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand.stable ? '' : ' (ověřuji…)'}` : 'Nic nenalezeno – přibližte se, nebo ťukněte na správný nápis v obraze.'}
+                  ${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand.buffers ? ' mezi symboly nárazníků' : field.key === 'length' ? ' (symboly nárazníků nevidím)' : ''}${cand.stable ? '' : ' (ověřuji…)'}` : 'Nic nenalezeno – přibližte se, nebo ťukněte na správný nápis v obraze.'}
                   ${knownValue && html` · v paměti: ${knownValue}`}
-                </div>`}
+                </div>
+                ${field.type === 'number' && axlesRow()}`}
           <div class="row" style="margin-top:.6rem">
             <button class="btn" onClick=${skip}>Na voze není</button>
             <${PhotoButton} class="btn" onPhoto=${fromPhoto} disabled=${busy}><${Icon} name="camera" /> ${busy ? 'Čtu…' : 'Fotka'}</${PhotoButton}>

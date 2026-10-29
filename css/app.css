@@ -230,6 +230,9 @@ button.chip { cursor: pointer; font-size: .95rem; padding: .35rem .7rem; }
 .stepitem .steplabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stepitem .grip { opacity: .55; letter-spacing: -2px; font-size: .75rem; }
 .stepitem.ok { background: rgba(47, 158, 68, .88); }
+/* přečteno už při jiném kroku, čeká na potvrzení */
+.stepitem.caught { background: rgba(25, 113, 194, .88); animation: caught .6s ease-out; }
+@keyframes caught { from { box-shadow: 0 0 0 4px #ffd43b; } to { box-shadow: 0 0 0 0 transparent; } }
 .stepitem.skip { background: rgba(0, 0, 0, .4); color: rgba(255, 255, 255, .6); text-decoration: line-through; }
 .stepitem.on { background: #fff; color: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
 .stepitem.dragging { outline: 2px solid #ffd43b; transform: scale(1.05); }
@@ -241,8 +244,11 @@ button.chip { cursor: pointer; font-size: .95rem; padding: .35rem .7rem; }
 .ask-title { font-size: 1.3rem; font-weight: 800; line-height: 1.2; }
 .ask-hint { font-size: .9rem; opacity: .9; }
 .input.bigvalue { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-.manual { display: flex; align-items: center; gap: .5rem; margin-top: .5rem; font-size: .9rem; color: var(--muted); }
-.manual .input { width: 90px; min-height: 40px; }
+/* počet náprav v kroku čísla vozu */
+.axles-row { display: flex; align-items: center; gap: .4rem; margin-top: .55rem; font-size: .9rem; color: var(--muted); }
+.axles-row .seg { flex: 1; gap: .3rem; }
+.axles-row .seg button { min-height: 42px; font-size: 1rem; }
+.axles-row .input { width: 58px; min-height: 42px; padding: .4rem; text-align: center; }
 .summary { list-style: none; margin: 0; padding: 0; font-size: .92rem; }
 .summary li { display: flex; justify-content: space-between; gap: 1rem; padding: .25rem 0; border-bottom: 1px solid var(--border); }
 .summary span { color: var(--muted); }

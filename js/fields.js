@@ -3,6 +3,7 @@
 // poslouží k natrénování sítě, která pozná, který nápis je který údaj.
 
 import { numberCandidates, digitsOnly, formatNumber, isCompleteNumber, BLOCKS } from './model.js';
+import { buffersAround, hull } from './frame.js';
 
 /**
  * Barva rámečku hodnoty v tunách pod vlastní hmotností (ukládá se barva, ne význam).
@@ -27,12 +28,13 @@ export const HAND_T = { key: 'hand_t', title: 'Síla zajišťovací brzdy', type
  * type: number = číslo vozu, qty = číslo s jednotkou, switch = volba tlačítkem (přestavovače, nápravy, špalíky),
  * text = volný text, weight = hmotnost + ruční brzda z jednoho rámečku.
  * wagonKey = kam se hodnota uloží k vozu (numeric = jako číslo), default = předvolená volba,
- * manual = u volby jde zadat i jiné číslo.
+ * derived = údaj nemá vlastní krok ani snímek: odvodí se z jiného kroku a vozmistr ho potvrdí v něm.
  */
 export const FIELDS = [
   { key: 'cislo', title: 'Číslo vozu', short: 'Číslo vozu', hint: '12místné číslo na boku vozu', type: 'number' },
-  { key: 'axles', title: 'Počet náprav', short: 'Nápravy', hint: 'spočítejte nápravy (dvojkolí) vozu', type: 'switch',
-    options: [['2', '2'], ['3', '3'], ['4', '4'], ['6', '6'], ['8', '8']], wagonKey: 'axles', numeric: true, manual: true },
+  // počet náprav z řady vozu (5.–8. číslice, js/series.js) – potvrzuje se spolu s číslem; celý vůz se nefotí
+  { key: 'axles', title: 'Počet náprav', short: 'Nápravy', type: 'switch', derived: 'cislo',
+    options: [['2', '2'], ['3', '3'], ['4', '4'], ['6', '6'], ['8', '8']], wagonKey: 'axles', numeric: true },
   { key: 'tare', title: 'Hmotnost a ruční brzda', short: 'Hmotnost + RB', type: 'weight', unit: 'kg', wagonKey: 'tare_kg',
     hint: 'rámeček s vlastní hmotností (kg) a pod ní síla zajišťovací brzdy (t)' },
   { key: 'hand_kn', title: 'Zajišťovací síla', short: 'Zaj. síla (kN)', hint: 'v kN, např. 20,2 kN', type: 'qty', unit: 'kN', wagonKey: 'hand_force_kn' },
@@ -105,7 +107,8 @@ const RULES = {
   // tabulka zatížení (A, B1, C … s několika hodnotami v řádku) ruční brzda není
   hand_t: (q) => (q.unit === 't' && q.v >= 3 && q.v <= 60 ? 1 + (numbersInLine(q.text) === 1 ? 2 : 0) : 0),
   hand_kn: (q) => (q.unit === 'kN' && q.v >= 3 && q.v <= 200 ? 3 : 0),
-  // délka přes nárazníky je nejdelší „m“ na voze; kratší (např. 7,00 m mezi otočnými čepy) ustoupí
+  // bez snímku (nebo když symboly nárazníků nejsou vidět) nejdelší „m“ na voze; kratší (např. 7,00 m mezi
+  // otočnými čepy) ustoupí. Délka mezi symboly nárazníků má přednost vždy (viz extractField).
   length: (q) => (q.unit === 'm' && q.v >= 8 && q.v <= 40 ? 1 + (q.decimals ? 2 : 0) + q.v / 100 : 0),
   speed: (q) => (q.unit === 'km/h' && q.v >= 10 && q.v <= 200 ? 3 : 0),
 };
@@ -113,20 +116,37 @@ const RULES = {
 const REV = /\bREV\b|R[EÉ]V[\s.:]/i;
 const DATE = /\b\d{1,2}\s?\.\s?\d{1,2}\s?\.\s?\d{2,4}\b/;
 
+/** Délka přes nárazníky je na voze vždy mezi symboly nárazníků „⊢— 12,04 m —⊣“ (hledají se v obraze, js/frame.js). */
+function betweenBuffers(q, lines, canvas) {
+  if (!canvas || q.unit !== 'm' || q.v < 5 || q.v > 40) return false;
+  const ls = q.li.map((i) => lines[i]);
+  const tilted = ls.find((l) => l.angle != null);
+  const b = buffersAround(canvas, { ...hull(ls), ...(tilted ? { angle: tilted.angle } : {}), ...(ls.length === 1 && ls[0].th ? { th: ls[0].th } : {}) });
+  return b.left && b.right;
+}
+
 /**
- * Nejlepší odhad hodnoty údaje z přečtených řádků.
- * Vrací { value (text k potvrzení), lines (indexy řádků, odkud je) } nebo null.
+ * Nejlepší odhad hodnoty údaje z přečtených řádků; canvas = snímek, ze kterého jsou (u délky symboly nárazníků).
+ * Vrací { value (text k potvrzení), lines (indexy řádků, odkud je), buffers (délka mezi nárazníky) } nebo null.
  */
-export function extractField(field, lines) {
+export function extractField(field, lines, canvas = null) {
   if (field.type === 'number') {
-    const c = numberCandidates(lines).find((x) => x.valid);
+    const cands = numberCandidates(lines);
+    const c = cands.find((x) => x.sure) ?? cands.find((x) => x.valid);
     return c ? { value: c.number, lines: c.lines, sure: c.sure } : null;
   }
   if (field.type === 'qty' || field.type === 'weight') {
     let best = null;
-    for (const q of quantities(lines)) {
-      const score = RULES[field.key](q);
-      if (score > 0 && (!best || score > best.score)) best = { value: String(inUnit(q, field.unit)), lines: q.li, score };
+    for (const q0 of quantities(lines)) {
+      // symbol nárazníku „⊢“ se občas přečte jako 1 („117,0m“ = ⊢ 17,0 m) – bez té 1 se bere jen mezi nárazníky
+      const k = Math.floor(Math.log10(q0.v));
+      const alt = field.key === 'length' && q0.unit === 'm' && q0.v > 40 && Math.floor(q0.v / 10 ** k) === 1
+        ? { ...q0, v: Math.round((q0.v - 10 ** k) * 100) / 100, alt: true } : null;
+      for (const q of alt ? [q0, alt] : [q0]) {
+        const buffers = field.key === 'length' && betweenBuffers(q, lines, canvas);
+        const score = buffers ? 10 + q.v / 100 : q.alt ? 0 : RULES[field.key](q);
+        if (score > 0 && (!best || score > best.score)) best = { value: String(inUnit(q, field.unit)), lines: q.li, score, buffers };
+      }
     }
     // rychlost bez „km/h“: řádek tabulky zatížení SS = 120 km/h, S = 100 km/h
     if (!best && field.key === 'speed') {
