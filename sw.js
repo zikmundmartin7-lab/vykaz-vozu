@@ -3,7 +3,7 @@
 // Velké soubory (neuronové sítě, ONNX runtime) jsou ve vlastní zásobě MODELS, aby se při každé nové verzi
 // aplikace nestahovalo znovu 25 MB. Při změně čtecích sítí zvýšit MODELS.
 
-const CACHE = 'vykaz-v16'; // zvýšit spolu s APP_VERSION v js/version.js
+const CACHE = 'vykaz-v17'; // zvýšit spolu s APP_VERSION v js/version.js
 const MODELS = 'vykaz-modely-v1';
 
 const SHELL = [
@@ -47,10 +47,12 @@ self.addEventListener('message', (e) => {
   if (e.data?.type === 'version') e.ports[0]?.postMessage(CACHE);
 });
 
-// Po aktivaci smazat starou verzi a otevřeným oknům říct, že je k dispozici nová
+// Po aktivaci smazat starou verzi a otevřeným oknům říct, že je k dispozici nová. Jen vlastní zásoby (vykaz-…):
+// na stejné adrese zikmundmartin7-lab.github.io běží i Závady vozů a jejich zásoby (zavady-…: aplikace, fotky,
+// sítě skeneru čísla) sdílí – dřív je každá aktualizace Výkazu smazala.
 self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
-    const old = (await caches.keys()).filter((k) => k !== CACHE && k !== MODELS);
+    const old = (await caches.keys()).filter((k) => k.startsWith('vykaz-') && k !== CACHE && k !== MODELS);
     await Promise.all(old.map((k) => caches.delete(k)));
     // ze zásoby sítí vyhodit soubory, které už aplikace nepoužívá (např. dřívější anglický model)
     const models = await caches.open(MODELS);
