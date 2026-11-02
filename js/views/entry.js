@@ -5,7 +5,7 @@
 import { html, useEffect, useRef, useState } from '../../vendor/preact-htm.js';
 import {
   SWITCHES, BRAKE_WEIGHTS, BRAKE_WEIGHTS_HALF, BLOCKS, WAGON_FIELDS, optionLabel, bwFor, wantedLoad, entryMassKg, trackClass, wagonWarnings,
-  ridFromLines, wagonFromEntry, renumberEntry, formatNumber, fmt, num, uid, toJpeg, isCompleteNumber,
+  ridFromLines, wagonFromEntry, renumberEntry, formatNumber, fmt, num, uid, toJpeg, isCompleteNumber, handForceInfo,
 } from '../model.js';
 import { db } from '../db.js';
 import { seriesInfo } from '../series.js';
@@ -14,7 +14,7 @@ import { brakeModels, predictSwitch } from '../brake.js';
 import { HAND_BRAKE, HAND_BRAKE_MEANING, parseRevision, formatRevision, revisionStatus, formatDay } from '../fields.js';
 import { Topbar, Icon, Seg, NumField, NumberInput, PhotoButton, BlobImg, toast, go } from '../ui.js';
 
-const FIELD_NO = { axles: '47.', length_m: '48.', tare_kg: '50.', hand_bw_t: '', hand_force_kn: '53.', max_speed: '57.' };
+const FIELD_NO = { axles: '47.', length_m: '48.', tare_kg: '50.', hand_bw_t: '', max_speed: '57.' };
 
 // Popisek fotky pro trénink podle konečného stavu vozu.
 function labelFor(kind, e) {
@@ -86,6 +86,7 @@ export function EntryView({ report, entryId, save }) {
   const [lines, setLines] = useState(null);
   const [focus, setFocus] = useState(null);
   const [editNumber, setEditNumber] = useState(null);   // rozepsané opravené číslo; null = neopravuje se
+  const [forceMode, setForceMode] = useState(null);     // zvolený druh nápisu zajišťovací síly, dokud nic nevyplněno
   const latest = useRef({});
   latest.current = { report, photos, save };
   const pending = useRef(null);
@@ -219,8 +220,32 @@ export function EntryView({ report, entryId, save }) {
         ${st.expired ? html`<b>⚠ Revize je prošlá – platila do ${formatDay(st.until)}.</b>` : `Platí do ${formatDay(st.until)}${st.soon ? ' – brzy vyprší' : ''}.`}</p>`}`;
   }
 
+  // 53. Zajišťovací síla: jeden údaj, nebo Min / Max a n/N (čl. 562); do výkazu se počítá podle čl. 427
+  function forceFields() {
+    const minmax = (forceMode ?? (e.hand_force_min_kn != null || e.hand_force_max_kn != null ? 'min' : 'single')) === 'min';
+    const mode = (v) => {
+      setForceMode(v);
+      if (v === 'min' && !minmax) update({ hand_force_min_kn: e.hand_force_kn ?? null, hand_force_kn: null });
+      if (v === 'single' && minmax) update({ hand_force_kn: e.hand_force_min_kn ?? null, hand_force_min_kn: null, hand_force_max_kn: null });
+    };
+    const box = (key, label, unit = 'kN') => html`<${NumField} label=${label} unit=${unit} value=${e[key]} bad=${bad.has(key)}
+      onFocus=${() => setFocus({ key, unit })} onChange=${(v) => update({ [key]: v })} />`;
+    const info = handForceInfo(e);
+    const axles = num(e.axles);
+    return html`<div class="field-title">53. Zajišťovací síla</div>
+      <${Seg} value=${minmax ? 'min' : 'single'} options=${[['single', 'Jeden údaj'], ['min', 'Min / Max']]} onChange=${mode} />
+      <div class="grid2" style="margin-top:.4rem">
+        ${minmax ? html`${box('hand_force_min_kn', 'Min')}${box('hand_force_max_kn', 'Max')}` : box('hand_force_kn', 'Zajišťovací síla')}
+        ${box('hand_n', 'n – náprav s ruční brzdou', '')}
+        ${box('hand_N', `N – náprav vozu${e.hand_N == null && axles !== null ? ` (${fmt(axles)})` : ''}`, '')}
+      </div>
+      ${warnList((k) => ['hand_force_kn', 'hand_force_min_kn', 'hand_force_max_kn', 'hand_n'].includes(k))}
+      <div class="hint">${info.value === null ? 'Z nápisu: jeden údaj „20,2 kN“, nebo „Min … kN (Max … kN)“ a drobně n/N.'
+        : html`Do výkazu: <b>${fmt(info.value)} kN</b> – ${info.why}${e.rucni === 'nema' || !e.hand_checked ? ' (zapíše se jen u ověřené ruční brzdy)' : ''}.`}</div>`;
+  }
+
   const massKg = entryMassKg(e);
-  const half = e.naklad === 'polo' || e.bw?.P_polo != null || e.bw?.G_polo != null || e.change2_t != null;
+  const half =e.naklad === 'polo' || e.bw?.P_polo != null || e.bw?.G_polo != null || e.change2_t != null;
   const tc = trackClass(e);
   // neobvyklé hodnoty (překlep, t místo kg): červené pole a pod skupinou polí vysvětlení
   const warns = wagonWarnings(e);
@@ -286,10 +311,11 @@ export function EntryView({ report, entryId, save }) {
               ${lines.map((l) => html`<div>${l.text}</div>`)}</details>`}
         </div>`}
         <div class="grid2">
-          ${WAGON_FIELDS.map(([key, label, unit]) => html`<${NumField} label=${`${FIELD_NO[key]} ${label}`.trim()} unit=${unit} value=${e[key]}
+          ${WAGON_FIELDS.filter(([key]) => key !== 'hand_force_kn').map(([key, label, unit]) => html`<${NumField} label=${`${FIELD_NO[key]} ${label}`.trim()} unit=${unit} value=${e[key]}
             bad=${bad.has(key)} onFocus=${() => setFocus({ key, unit })} onChange=${(v) => update({ [key]: v })} />`)}
         </div>
-        ${warnList((k) => WAGON_FIELDS.some(([f]) => f === k))}
+        ${warnList((k) => k !== 'hand_force_kn' && WAGON_FIELDS.some(([f]) => f === k))}
+        ${forceFields()}
         ${revisionFields()}
         ${e.series_note && html`<p class="hint err">${e.series_note}</p>`}
         <div class="field-title">Rámeček u síly zajišťovací brzdy (pod vlastní hmotností)</div>

@@ -1,2 +1,2 @@
-// Verze aplikace, kterou má tento kód. Při každé nové verzi zvýšit spolu s CACHE v sw.js ('vykaz-v22').
-export const APP_VERSION = 22;
+// Verze aplikace, kterou má tento kód. Při každé nové verzi zvýšit spolu s CACHE v sw.js ('vykaz-v23').
+export const APP_VERSION = 23;

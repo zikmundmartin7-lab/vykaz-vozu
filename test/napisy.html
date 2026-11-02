@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="cs"><head><meta charset="utf-8"><title>Test nápisů</title>
+<style>body{font:14px sans-serif;margin:8px} canvas{max-width:480px;border:1px solid #888;margin:2px} pre{white-space:pre-wrap}
+.ok{color:#080}.bad{color:#c00}</style></head>
+<body><pre id="out">…</pre><div id="pics"></div>
+<script type="module">
+// Uměle vyrobené nápisy (revize s buňkami, zajišťovací síla podle čl. 562 předpisu) projeté celým čtením:
+// sítě PaddleOCR + pravidla z js/fields.js. Fotky skutečných vozů nenahrazují, hlídají ale, že pravidla
+// rozumí rozložení nápisu. Spuštění: python3 -m http.server 8770, pak http://localhost:8770/test/napisy.html
+import { readText, readLine, loadOcr } from '../js/ocr.js';
+import { FIELD, extractField, readRevisionYears, parseRevision } from '../js/fields.js';
+
+const out = document.getElementById('out');
+const log = (s, cls) => { const span = document.createElement('span'); if (cls) span.className = cls; span.textContent = `${s}\n`; out.append(span); };
+out.textContent = '';
+window.results = [];
+
+// náhodná čísla se stejnou řadou při každém spuštění
+let seed = 7;
+const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+
+function scene(w, h, bg) {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, w, h);
+  grad.addColorStop(0, bg[0]);
+  grad.addColorStop(1, bg[1]);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, w, h);
+  return { c, g };
+}
+
+// šum a mírné rozmazání jako z kamery
+function camera(c, blur = 1.2, noise = 18) {
+  const d = document.createElement('canvas');
+  d.width = c.width;
+  d.height = c.height;
+  const g = d.getContext('2d');
+  g.filter = `blur(${blur}px)`;
+  g.drawImage(c, 0, 0);
+  g.filter = 'none';
+  const img = g.getImageData(0, 0, d.width, d.height);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const n = (rnd() - 0.5) * noise;
+    img.data[i] += n; img.data[i + 1] += n; img.data[i + 2] += n;
+  }
+  g.putImageData(img, 0, 0);
+  return d;
+}
+
+function rotate(c, deg) {
+  const d = document.createElement('canvas');
+  d.width = c.width;
+  d.height = c.height;
+  const g = d.getContext('2d');
+  g.fillStyle = '#555';
+  g.fillRect(0, 0, d.width, d.height);
+  g.translate(d.width / 2, d.height / 2);
+  g.rotate((deg * Math.PI) / 180);
+  g.drawImage(c, -c.width / 2, -c.height / 2);
+  return d;
+}
+
+const font = (px, bold = true) => `${bold ? 'bold ' : ''}${px}px "DejaVu Sans"`;
+
+// obdélník rozdělený na buňky: cells = [{ w, text, px }], text uprostřed buňky
+function panel(g, x, y, h, cells, ink, lw = 4) {
+  g.strokeStyle = ink;
+  g.fillStyle = ink;
+  g.lineWidth = lw;
+  const total = cells.reduce((s, c) => s + c.w, 0);
+  g.strokeRect(x, y, total, h);
+  let cx = x;
+  for (const [i, cell] of cells.entries()) {
+    if (i) { g.beginPath(); g.moveTo(cx, y); g.lineTo(cx, y + h); g.stroke(); }
+    g.font = font(cell.px ?? h * 0.55);
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    if (cell.text) g.fillText(cell.text, cx + cell.w / 2, y + h / 2 + 2);
+    cx += cell.w;
+  }
+  return total;
+}
+
+function text(g, s, x, y, px, ink, align = 'left') {
+  g.font = font(px);
+  g.fillStyle = ink;
+  g.textAlign = align;
+  g.textBaseline = 'middle';
+  g.fillText(s, x, y);
+}
+
+// ───── revize ─────
+const REVISIONS = [
+  { name: 'revize: 3 buňky, bílá na hnědé', want: '6|13.03.24|3', cells: 3, draw(g) {
+    const w = panel(g, 380, 420, 90, [{ w: 90, text: '6' }, { w: 260, text: 'ČD 22' }, { w: 330, text: '13.03.24' }], '#f2f2f2');
+    text(g, '+3 M', 380 + w + 30, 467, 48, '#f2f2f2');
+  } },
+  { name: 'revize: číslo 4 vlevo mimo obdélník (cizí nápis)', want: '6|13.03.24|0', cells: 3, draw(g) {
+    text(g, '4', 180, 467, 52, '#f2f2f2');
+    panel(g, 380, 420, 90, [{ w: 90, text: '6' }, { w: 260, text: 'ČD 22' }, { w: 330, text: '13.03.24' }], '#f2f2f2');
+  } },
+  { name: 'revize: REV vlevo, nakloněno 6°', want: '8|02.11.21|0', cells: 3, rotate: 6, draw(g) {
+    text(g, 'REV', 200, 467, 52, '#f2f2f2');
+    panel(g, 380, 420, 90, [{ w: 90, text: '8' }, { w: 300, text: 'DB 5H' }, { w: 330, text: '02.11.21' }], '#f2f2f2');
+  } },
+  { name: 'revize: černá na šedé, tenké čáry', want: '4|21.06.2023|0', cells: 3, bg: ['#9aa0a4', '#7d8388'], draw(g) {
+    panel(g, 300, 400, 100, [{ w: 100, text: '4' }, { w: 280, text: 'PKP 41' }, { w: 400, text: '21.06.2023' }], '#151515', 3);
+  } },
+  { name: 'revize: malá číslice v široké 1. buňce', want: '6|30.09.22|0', cells: 3, draw(g) {
+    panel(g, 380, 420, 100, [{ w: 140, text: '6', px: 40 }, { w: 260, text: 'ŽOS' }, { w: 330, text: '30.09.22' }], '#f2f2f2');
+  } },
+  // dropYears: jako by detektor samotnou číslici v buňce přehlédl – roky se musí dočíst z místa 1. buňky
+  { name: 'revize: roky přehlédnuté, cizí 4 vlevo', want: '6|13.03.24|0', cells: 3, dropYears: true, draw(g) {
+    text(g, '4', 200, 467, 52, '#f2f2f2');
+    panel(g, 380, 420, 90, [{ w: 90, text: '6' }, { w: 260, text: 'ČD 22' }, { w: 330, text: '13.03.24' }], '#f2f2f2');
+  } },
+  { name: 'revize: roky přehlédnuté, nakloněno −8°', want: '5|07.04.25|0', cells: 3, dropYears: true, rotate: -8, draw(g) {
+    panel(g, 380, 420, 90, [{ w: 110, text: '5' }, { w: 300, text: 'CZ 41' }, { w: 330, text: '07.04.25' }], '#f2f2f2');
+  } },
+  { name: 'revize: silně rozmazaná, +2 M', want: '6|15.01.24|2', cells: 3, blur: 2.4, draw(g) {
+    const w = panel(g, 380, 420, 90, [{ w: 90, text: '6' }, { w: 260, text: 'ČD 22' }, { w: 330, text: '15.01.24' }], '#f2f2f2');
+    text(g, '+2 M', 380 + w + 30, 467, 48, '#f2f2f2');
+  } },
+  { name: 'revize: bez čar (původní pravidla)', want: '6|13.03.24|0', cells: 0, draw(g) {
+    text(g, '6', 420, 467, 50, '#f2f2f2');
+    text(g, 'ČD 22', 520, 467, 50, '#f2f2f2');
+    text(g, '13.03.24', 740, 467, 50, '#f2f2f2');
+  } },
+];
+
+// ───── zajišťovací síla (čl. 562) ─────
+function brakeSymbol(g, x, y, s, ink) {
+  g.strokeStyle = ink;
+  g.lineWidth = s * 0.12;
+  g.beginPath(); g.moveTo(x, y - s * 0.5); g.lineTo(x + s * 0.7, y - s * 0.5); g.moveTo(x + s * 0.35, y - s * 0.5); g.lineTo(x + s * 0.35, y + s * 0.5); g.stroke();
+}
+const FORCES = [
+  { name: 'síla: Min nad Max, n/N vpravo dole (obrázek čl. 562)', want: '18|36|2/4', draw(g) {
+    g.strokeStyle = '#d01818'; g.lineWidth = 6; g.strokeRect(300, 360, 820, 210);
+    brakeSymbol(g, 340, 450, 90, '#111');
+    text(g, 'Min 18,0 kN', 470, 420, 70, '#111');
+    text(g, '( Max 36,0 kN )', 600, 510, 46, '#111');
+    text(g, '2/4', 1000, 535, 34, '#111');
+  } },
+  { name: 'síla: vše v jednom řádku', want: '12.5|25|2/4', bg: ['#e8e8e0', '#d0d0c8'], draw(g) {
+    g.strokeStyle = '#d01818'; g.lineWidth = 6; g.strokeRect(160, 400, 1280, 130);
+    text(g, 'Min 12,5 kN', 260, 465, 64, '#111');
+    text(g, '( Max 25,0 kN ) 2/4', 720, 470, 44, '#111');
+  } },
+  { name: 'síla: jeden údaj v rámečku', want: '20.2', draw(g) {
+    g.strokeStyle = '#f2f2f2'; g.lineWidth = 5; g.strokeRect(500, 400, 420, 120);
+    text(g, '20,2 kN', 710, 462, 72, '#f2f2f2', 'center');
+  } },
+  { name: 'síla: jen Min', want: '14||2/2', draw(g) {
+    g.strokeStyle = '#d01818'; g.lineWidth = 6; g.strokeRect(300, 380, 760, 170);
+    text(g, 'Min 14,0 kN', 420, 450, 70, '#f2f2f2');
+    text(g, '2/2', 940, 520, 34, '#f2f2f2');
+  } },
+  { name: 'síla: vedle hmotnosti a „MAX 2,5 %“', want: '20.2', draw(g) {
+    g.strokeStyle = '#f2f2f2'; g.lineWidth = 5;
+    g.strokeRect(200, 300, 400, 200); g.beginPath(); g.moveTo(200, 400); g.lineTo(600, 400); g.stroke();
+    text(g, '23 500 kg', 400, 350, 60, '#f2f2f2', 'center');
+    text(g, '20,0 t', 400, 452, 60, '#f2f2f2', 'center');
+    g.strokeRect(700, 340, 360, 110);
+    text(g, '20,2 kN', 880, 397, 64, '#f2f2f2', 'center');
+    text(g, 'MAX: 2,5 %', 1200, 640, 50, '#f2f2f2');
+  } },
+  { name: 'síla: vedle „R min 35 m“ (poloměr oblouku)', want: '20.2', draw(g) {
+    text(g, 'R min 35 m', 260, 300, 56, '#f2f2f2');
+    g.strokeStyle = '#f2f2f2'; g.lineWidth = 5; g.strokeRect(700, 420, 360, 110);
+    text(g, '20,2 kN', 880, 477, 64, '#f2f2f2', 'center');
+  } },
+];
+
+function render(sc) {
+  const { c, g } = scene(1600, 900, sc.bg ?? ['#5a3a2a', '#3e2a20']);
+  sc.draw(g);
+  return camera(sc.rotate ? rotate(c, sc.rotate) : c, sc.blur);
+}
+
+function show(c, ok) {
+  c.title = ok ? 'OK' : 'CHYBA';
+  c.style.borderColor = ok ? '#080' : '#c00';
+  document.getElementById('pics').append(c);
+}
+
+await loadOcr();
+const run = async (list, field, read) => {
+  for (const sc of list) {
+    const c = render(sc);
+    const lines = await readText(c);
+    const { got, cells } = await read(c, lines, sc);
+    const ok = got === sc.want && (sc.cells == null || cells === sc.cells);
+    window.results.push({ name: sc.name, want: sc.want, got, cells, ok, lines: lines.map((l) => l.text) });
+    const note = sc.cells == null ? '' : ` (buněk ${cells ?? 0}${cells === sc.cells ? '' : `, chci ${sc.cells}`})`;
+    log(`${ok ? '✓' : '✗'} ${sc.name}: chci ${sc.want}, čtu ${got ?? '—'}${note}   [${lines.map((l) => l.text).join(' | ')}]`, ok ? 'ok' : 'bad');
+    show(c, ok);
+  }
+};
+await run(REVISIONS, FIELD.revize, async (c, lines, sc) => {
+  const ls = sc.dropYears ? lines.filter((l) => !/^\d{1,2}$/.test(l.text.trim())) : lines;
+  const found = await readRevisionYears(extractField(FIELD.revize, ls, c), c, readLine);
+  return { got: found?.value ?? null, cells: found?.cells };
+});
+await run(FORCES, FIELD.hand_kn, async (c, lines) => ({ got: extractField(FIELD.hand_kn, lines, c)?.value ?? null }));
+const bad = window.results.filter((r) => !r.ok).length;
+log(bad ? `CHYB: ${bad} z ${window.results.length}` : `VŠE V POŘÁDKU (${window.results.length})`, bad ? 'bad' : 'ok');
+window.done = true;
+</script></body></html>

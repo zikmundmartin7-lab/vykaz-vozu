@@ -161,8 +161,10 @@ export const WAGON_FIELDS = [
 ];
 // change_t = přestavná hmotnost (t) ze štítku přestavovače, u P-½L-L change2_t = mezi ½ ložený a ložený;
 // bw_max = „MAX … t“ u samočinného brzdění podle nákladu; load_auto = vůz má samočinný přestavovač.
+// Zajišťovací síla (čl. 562): hand_force_kn = jeden údaj „… kN“; novější nápis „Min … kN (Max … kN) n/N“ =
+// hand_force_min_kn, hand_force_max_kn, hand_n (náprav s ruční brzdou) a hand_N (všech náprav vozu).
 const STATIC_KEYS = [...WAGON_FIELDS.map(([k]) => k), 'blocks', 'revision', 'hand_brake', 'series',
-  'change_t', 'change2_t', 'bw_max', 'load_auto'];
+  'change_t', 'change2_t', 'bw_max', 'load_auto', 'hand_force_min_kn', 'hand_force_max_kn', 'hand_n', 'hand_N'];
 
 /**
  * Nový vůz ve výkazu: údaje z nápisů z paměti (wagon), polohy přestavovačů a stanice určení
@@ -301,6 +303,7 @@ export function trackClass(e) {
 const RANGES = {
   axles: [2, 12], length_m: [5, 40], tare_kg: [8000, 60000], hand_bw_t: [3, 60], hand_force_kn: [3, 200],
   max_speed: [10, 200], bw: [5, 200], change_t: [5, 200], change2_t: [5, 200], bw_max: [5, 200],
+  hand_force_min_kn: [3, 200], hand_force_max_kn: [3, 200],
 };
 const MAX_AXLE_T = 22.5;   // nejvyšší hmotnost na nápravu, traťová třída D
 
@@ -344,6 +347,12 @@ export function wagonWarnings(e) {
     out.push({ key: 'change2_t', text: `Přestavná hmotnost ½ → ložený (${fmt(e.change2_t)} t) bývá vyšší než prázdný → ½ (${fmt(e.change_t)} t)` });
   }
   range('bw_max', num(e.bw_max), 'MAX', 't', RANGES.bw_max);
+  range('hand_force_min_kn', num(e.hand_force_min_kn), 'Zajišťovací síla Min', 'kN', RANGES.hand_force_min_kn);
+  range('hand_force_max_kn', num(e.hand_force_max_kn), 'Zajišťovací síla Max', 'kN', RANGES.hand_force_max_kn);
+  const [hn, hN] = [num(e.hand_n), num(e.hand_N) ?? num(e.axles)];
+  if (hn !== null && (!Number.isInteger(hn) || hn < 1 || (hN !== null && hn > hN))) {
+    out.push({ key: 'hand_n', text: `Náprav s ruční brzdou (n = ${fmt(hn)}) musí být celé číslo od 1 do počtu náprav vozu` });
+  }
   const m = entryMassKg(e);
   const axles = num(e.axles);
   if (m !== null && axles >= 1 && m / axles / 1000 > MAX_AXLE_T) {
@@ -353,8 +362,42 @@ export function wagonWarnings(e) {
   return out;
 }
 
-/** Kolonka 53 se vyplní jen u vozů, u nichž se ověřila činnost ruční brzdy. */
-export const handForce = (e) => (e.rucni !== 'nema' && e.hand_checked ? num(e.hand_force_kn) : null);
+/**
+ * Zajišťovací síla vozu podle nápisu a dopravní hmotnosti (čl. 63 b, 427; dopravní hmotnost v t = kN, n/N =
+ * náprav s ruční brzdou / všech náprav, N není-li vyznačeno = počet náprav vozu). Výsledek se zaokrouhluje dolů na 0,1 kN.
+ * Nápis „Min … kN (Max … kN)“: prázdný vůz Min, jinak dopravní hmotnost × n/N v mezích Min–Max; jen Min = vždy Min;
+ * Max menší než Min (starší vozy) = u loženého i částečně loženého vozu nižší hodnota bez přepočtu.
+ * Jeden údaj „… kN“: dopravní hmotnost × n/N, nejvýš vyznačená hodnota; bez n/N vyznačená hodnota.
+ * Vrací { value (kN; null = nápis chybí), why }.
+ */
+export function handForceInfo(e) {
+  const min = num(e.hand_force_min_kn);
+  const max = num(e.hand_force_max_kn);
+  const single = num(e.hand_force_kn);
+  const n = num(e.hand_n);
+  const N = num(e.hand_N) ?? num(e.axles);
+  const ratio = n !== null && N !== null && Number.isInteger(n) && n >= 1 && n <= N ? n / N : null;
+  const kg = entryMassKg(e);
+  const calc = kg !== null && ratio !== null ? Math.floor(Math.round((kg / 1000) * ratio * 1000) / 100) / 10 : null;
+  const how = calc === null ? '' : `dopravní hmotnost ${fmt(kg / 1000, 2)} t × ${n}/${N} = ${fmt(calc)} kN`;
+  if (min !== null) {
+    const empty = !num(e.cargo_kg);
+    if (max === null) return { value: min, why: 'na voze jen Min – platí vždy' };
+    if (empty) return { value: min, why: 'prázdný vůz – Min' };
+    if (max < min) return { value: max, why: 'Max je menší než Min (starší vůz) – platí nižší hodnota bez přepočtu' };
+    if (calc === null) {
+      return { value: min, why: `${kg === null ? 'chybí hmotnost vozu' : 'chybí počet náprav s ruční brzdou (n)'} – počítá se Min` };
+    }
+    const v = Math.min(max, Math.max(min, calc));
+    return { value: v, why: v === calc ? how : `${how}, v mezích Min–Max → ${v === max ? 'Max' : 'Min'}` };
+  }
+  if (single === null) return { value: null, why: 'zajišťovací síla není zadaná' };
+  if (calc === null || calc >= single) return { value: single, why: calc === null ? 'vyznačená hodnota' : `vyznačená hodnota (${how})` };
+  return { value: calc, why: `${how} – méně než vyznačených ${fmt(single)} kN` };
+}
+
+/** Kolonka 53 se vyplní jen u vozů, u nichž se ověřila činnost ruční brzdy (čl. 63 b). */
+export const handForce = (e) => (e.rucni !== 'nema' && e.hand_checked ? handForceInfo(e).value : null);
 
 /** Součty za vlak (řádek CELKEM a brzdicí procenta). Chybějící údaj = součet je neúplný (missing > 0). */
 export function totals(entries) {

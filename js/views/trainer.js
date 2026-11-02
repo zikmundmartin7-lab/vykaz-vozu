@@ -10,10 +10,10 @@ import { predictSwitch } from '../brake.js';
 import {
   FIELDS, FIELD, HAND_T, HAND_BRAKE, HAND_BRAKE_MEANING, extractField, parseRevision, formatRevision,
   parseRevDate, revisionStatus, formatDay, readRevisionYears, extractHandT, valueFromLine, normalizeValue, isValidValue, displayValue, matchingLines,
-  LOAD_KEYS, extractLoadBrake, loadNumbers, formatLoad,
+  LOAD_KEYS, extractLoadBrake, loadNumbers, formatLoad, parseForce, formatForce, describeForce, forceToWagon, wagonForce, forceFromLine,
 } from '../fields.js';
 import { db } from '../db.js';
-import { uid, formatNumber, isValidCheckDigit, digitsOnly, loadBrakeToWagon } from '../model.js';
+import { uid, formatNumber, isValidCheckDigit, digitsOnly, loadBrakeToWagon, plural } from '../model.js';
 import { Icon, Seg, PhotoButton, vibrate, toast } from '../ui.js';
 import { useCameraLight, LightButtons, BrightnessSlider, applyGain } from '../light.js';
 import { handBrakeFrame, hull } from '../frame.js';
@@ -59,6 +59,32 @@ function mapping(el, w, h, mode) {
 }
 
 const dec = (v) => String(v).replace('.', ',');
+
+// Zajišťovací síla: jeden údaj, nebo Min / Max s n/N (předpis čl. 562). Pole na obrazovce ↔ uložený text (parseForce).
+const FORCE_KINDS = [['single', 'Jeden údaj'], ['min', 'Min / Max']];
+const EMPTY_FORCE = { kind: 'single', a: '', b: '', nN: '' };
+function forceInputs(value) {
+  const f = parseForce(value);
+  if (!f) return EMPTY_FORCE;
+  if (f.single != null) return { ...EMPTY_FORCE, a: dec(f.single) };
+  return { kind: 'min', a: f.min != null ? dec(f.min) : '', b: f.max != null ? dec(f.max) : '', nN: f.n != null && f.N != null ? `${f.n}/${f.N}` : '' };
+}
+function forceValue(x) {
+  const n = (s) => {
+    const v = Number(String(s).replace(/\s/g, '').replace(',', '.'));
+    return String(s).trim() && Number.isFinite(v) ? v : null;
+  };
+  const a = n(x.a);
+  if (a === null) return { error: x.kind === 'min' ? 'Zadejte Min v kN.' : 'Zadejte zajišťovací sílu v kN, nebo zvolte „Na voze není“.' };
+  if (x.kind === 'single') return { value: formatForce({ single: a }) };
+  const b = x.b.trim() ? n(x.b) : null;
+  if (x.b.trim() && b === null) return { error: 'Max zadejte jako číslo v kN.' };
+  const m = x.nN.trim().match(/^(\d{1,2})\s*\/\s*(\d{1,2})$/);
+  if (x.nN.trim() && (!m || Number(m[1]) < 1 || Number(m[1]) > Number(m[2]))) {
+    return { error: 'n/N zadejte jako 2/4 (n náprav s ruční brzdou z N náprav vozu).' };
+  }
+  return { value: formatForce({ min: a, max: b, n: m ? Number(m[1]) : null, N: m ? Number(m[2]) : null }) };
+}
 
 // Hodnota do pole k úpravě (číslo vozu s mezerami, desetinná čárka).
 function editable(field, value) {
@@ -180,6 +206,7 @@ export function Trainer({ onClose }) {
   const [input, setInput] = useState('');
   const [input2, setInput2] = useState('');          // síla zajišťovací brzdy (t) v kroku s hmotností
   const [rev, setRev] = useState({ years: '', date: '', ext: '' }); // revize: roky, datum, prodloužení (měsíce)
+  const [force, setForce] = useState(EMPTY_FORCE);   // zajišťovací síla: druh nápisu a pole (forceInputs)
   const [cand2, setCand2] = useState(null);
   const [frameColor, setFrameColor] = useState(null); // { value: cerveny | jiny | null, why }
   const [info, setInfo] = useState(null);            // řada vozu podle čísla
@@ -330,13 +357,18 @@ export function Trainer({ onClose }) {
       const fill = Object.fromEntries(LOAD_KEYS.filter((k) => best[k] != null).map((k) => [k, dec(best[k])]));
       if (!live.current.plateTouched && Object.keys(fill).length) setPlate((old) => ({ ...old, ...fill }));
     } else if (f.type === 'revision') {
-      const found = await readRevisionYears(extractField(f, lines), canvas, readLine);
+      const found = await readRevisionYears(extractField(f, lines, canvas), canvas, readLine);
       const best = pick(v.main, found?.value);
       setCand(found ? { ...found, stable: best === found.value } : null);
       if (best && !keep()) {
         const r = parseRevision(best);
         setRev({ years: r.years ? String(r.years) : '', date: r.date, ext: r.ext ? String(r.ext) : '' });
       }
+    } else if (f.type === 'force') {
+      const found = extractField(f, lines);
+      const best = pick(v.main, found?.value);
+      setCand(found ? { ...found, stable: best === found.value } : null);
+      if (best && !keep()) setForce(forceInputs(best));
     } else {
       // rychlost, kterou z nápisů nejde přečíst, se navrhne podle řady (s = 100 km/h, ss = 120 km/h)
       const seriesSpeed = f.key === 'speed' && live.current.info?.speed;
@@ -404,6 +436,7 @@ export function Trainer({ onClose }) {
       const r = prev ? parseRevision(prev) : null;
       setRev({ years: r?.years ? String(r.years) : '', date: r?.date ?? '', ext: r?.ext ? String(r.ext) : '' });
     }
+    if (f?.type === 'force') setForce(prev ? forceInputs(prev) : EMPTY_FORCE);
     const c = f && prev === undefined ? caughtNow[key] : null;
     setCaughtFrom(c?.from ?? null);
     if (c) {
@@ -454,6 +487,12 @@ export function Trainer({ onClose }) {
       setRev((r) => ({ ...r, ...(date ? { date: date.replace(/\s/g, '') } : {}), ...(ext ? { ext } : {}), ...(years && !date ? { years } : {}) }));
       return;
     }
+    if (field.type === 'force') {
+      // „Min …“ / „Max …“ / n/N do svého pole, samotné číslo s kN do prvního
+      const part = forceFromLine(frame.lines, i);
+      setForce((x) => ({ ...x, ...part }));
+      return;
+    }
     if (field.type === 'weight' && !/kg/i.test(text) && /\d\s*[.,]?\s*[0oO]?\s*t\b/i.test(text)) {
       setInput2(editable(HAND_T, valueFromLine(HAND_T, frame.lines, i)));
     } else setInput(editable(field, valueFromLine(field, frame.lines, i)));
@@ -497,6 +536,7 @@ export function Trainer({ onClose }) {
     if (field.type === 'weight') return confirmWeight();
     if (field.type === 'loadbrake') return confirmLoadBrake();
     if (field.type === 'revision') return confirmRevision();
+    if (field.type === 'force') return confirmForce();
     const value = field.type === 'switch' ? choice : normalizeValue(field, input);
     if (!isValidValue(field, value)) {
       toast(field.type === 'number' ? 'Číslo vozu musí mít 12 číslic.' : 'Zadejte hodnotu, nebo zvolte „Na voze není“.');
@@ -586,24 +626,39 @@ export function Trainer({ onClose }) {
     goTo(nextKey(next), next);
   }
 
+  // Přečtený snímek k potvrzené hodnotě kroku jako trénovací příklad (text s rámečky a označený nápis).
+  async function storeShot(value, match) {
+    if (!frame) return;
+    const small = shrink(frame);
+    const blob = await new Promise((res) => small.canvas.toBlob(res, 'image/jpeg', 0.82));
+    await db.addSample({
+      id: uid(), kind: field.key, label: value, blob, wagon: values.cislo ?? '',
+      created_at: new Date().toISOString(), source: 'trenink',
+      predicted: cand ? { label: cand.value } : null,
+      ocr: ocrRecord(small),
+      match: tapped !== null ? [tapped] : match,
+    });
+    announce(blob, `${field.title}: ${displayValue(field, value)}`);
+  }
+
+  // Zajišťovací síla: jeden údaj, nebo Min / Max a n/N – uloží se, jak jsou na nápisu (kolonka 53 se z nich počítá ve výkazu).
+  async function confirmForce() {
+    const { value, error } = forceValue(force);
+    if (error) return toast(error);
+    await storeShot(value, frame ? matchingLines(field, frame.lines, value) : []);
+    vibrate(50);
+    const next = { ...values, hand_kn: value };
+    setValues(next);
+    goTo(nextKey(next), next);
+  }
+
   // Revize: roky z 1. rámečku, datum z posledního, případné prodloužení „+N M“; prošlou revizi hned ohlásit.
   async function confirmRevision() {
     const r = { years: Number(rev.years) || null, date: rev.date.replace(/\s/g, ''), ext: Number(rev.ext) || 0 };
     if (!parseRevDate(r.date)) return toast('Zadejte datum revize z posledního rámečku (např. 13.03.24).');
     if (!r.years) return toast('Doplňte počet let z prvního rámečku.');
     const value = formatRevision(r);
-    if (frame) {
-      const small = shrink(frame);
-      const blob = await new Promise((res) => small.canvas.toBlob(res, 'image/jpeg', 0.82));
-      await db.addSample({
-        id: uid(), kind: field.key, label: value, blob, wagon: values.cislo ?? '',
-        created_at: new Date().toISOString(), source: 'trenink',
-        predicted: cand ? { label: cand.value } : null,
-        ocr: ocrRecord(small),
-        match: tapped !== null ? [tapped] : cand?.lines ?? [],
-      });
-      announce(blob, `${field.title}: ${displayValue(field, value)}`);
-    }
+    await storeShot(value, cand?.lines ?? []);
     const st = revisionStatus(r);
     if (st.expired) {
       vibrate(400);
@@ -677,6 +732,7 @@ export function Trainer({ onClose }) {
       if (f.wagonKey && values[f.key] != null) w[f.wagonKey] = f.type === 'qty' || f.type === 'weight' || f.numeric ? Number(values[f.key]) : values[f.key];
     }
     if (values.hand_brake) w.hand_brake = values.hand_brake;
+    if (values.hand_kn) Object.assign(w, forceToWagon(parseForce(values.hand_kn), w));
     if (values.naklad || values.lb) Object.assign(w, loadBrakeToWagon(values.lb, values.naklad, w));
     if (info?.series) w.series = info.series;
     await db.saveWagon(w);
@@ -734,7 +790,8 @@ export function Trainer({ onClose }) {
             : html`Platí do <b>${formatDay(st.until)}</b>${st.soon ? ' – brzy vyprší' : ''}.`
           : rev.date && !r.years ? 'Doplňte počet let z prvního rámečku.' : 'Namiřte na nápis revize.'}
       </div>
-      <div class="hint">${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand.stable ? '' : ' (ověřuji…)'}` : ''}
+      <div class="hint">${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand.stable ? '' : ' (ověřuji…)'}${
+          cand.cells ? ` · obdélník: ${plural(cand.cells, 'buňka', 'buňky', 'buněk')}` : ''}` : ''}
         ${knownValue && html` · v paměti: ${knownValue}`}</div>`;
   }
 
@@ -756,6 +813,22 @@ export function Trainer({ onClose }) {
           : 'Nic nenalezeno – přibližte se, nebo ťukněte na nápis.'}
         ${knownValue && html` · v paměti: ${knownValue}`}
       </div>`;
+  }
+
+  // Zajišťovací síla: druh nápisu, k jednomu údaji jedno pole, k Min / Max ještě Max a n/N.
+  function forcePanel() {
+    const minmax = force.kind === 'min';
+    const set = (k) => (e) => { setTouched(true); setForce((x) => ({ ...x, [k]: e.target.value })); };
+    const box = (k, label, placeholder, mode = 'decimal') => html`<label class="field"><span>${label}</span>
+      <input class="input bigvalue" value=${force[k]} inputmode=${mode} placeholder=${placeholder} onFocus=${freeze} onInput=${set(k)} /></label>`;
+    return html`<${Seg} value=${force.kind} options=${FORCE_KINDS} onChange=${(v) => { setTouched(true); setForce((x) => ({ ...x, kind: v })); }} />
+      ${minmax
+        ? html`<div class="grid3e lbgrid">${box('a', 'Min (kN)', '—')}${box('b', 'Max (kN)', '—')}${box('nN', 'n/N', '2/4', 'text')}</div>`
+        : box('a', 'Zajišťovací síla (kN)', 'nenalezeno')}
+      <div class="hint">${minmax ? 'n/N = náprav s ruční brzdou / všech náprav (drobně vpravo dole)' : 'starší nápis s jedním údajem v kN'}</div>
+      <div class="hint">${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand.stable ? '' : ' (ověřuji…)'}`
+        : 'Nic nenalezeno – přibližte se, nebo ťukněte na nápis.'}
+        ${knownValue && html` · v paměti: ${knownValue}`}</div>`;
   }
 
   // Přestavovač prázdný/ložený: poloha páky a brzdicí váhy ze štítku (½ ložený jen u P-½L-L), přestavná hmotnost,
@@ -802,6 +875,7 @@ export function Trainer({ onClose }) {
 
   const knownValue = field?.type === 'loadbrake' && known
     ? formatLoad({ empty: known.bw?.P_prazdny, half: known.bw?.P_polo, loaded: known.bw?.P_lozeny, change: known.change_t, change2: known.change2_t, max: known.bw_max }) || null
+    : field?.type === 'force' && known ? describeForce(wagonForce(known)) || null
     : field?.wagonKey && known?.[field.wagonKey] != null ? displayValue(field, String(known[field.wagonKey])) : null;
 
   return html`<div class="scanner trainer">
@@ -844,7 +918,8 @@ export function Trainer({ onClose }) {
               <button class="btn ok big" style="flex:2" onClick=${saveWagon}><${Icon} name="check" /> Uložit a další vůz</button>
             </div>`
         : html`
-          ${field.type === 'weight' ? weightPanel() : field.type === 'revision' ? revisionPanel() : field.type === 'loadbrake' ? loadPanel() : field.type === 'switch'
+          ${field.type === 'weight' ? weightPanel() : field.type === 'revision' ? revisionPanel() : field.type === 'loadbrake' ? loadPanel()
+            : field.type === 'force' ? forcePanel() : field.type === 'switch'
             ? html`<${Seg} value=${choice} options=${field.options} bad=${field.bad} onChange=${(v) => { setChoice(v); setTouched(true); }} />
                 <div class="hint">${pred ? html`Síť odhaduje <b>${displayValue(field, pred.label)}</b> (${Math.round(pred.prob * 100)} %).`
                   : cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>.`
