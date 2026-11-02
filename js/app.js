@@ -97,7 +97,9 @@ function App() {
         adding = false;
       }
     };
-    return html`<${Scanner} onDone=${onDone} onClose=${() => go(`#/vykaz/${report.id}`, true)} position=${position} />`;
+    // paměť vozů: skener podle ní doplní začátek čísla, který se na voze nepřečte (přetřené „83“)
+    const known = async () => (await db.wagons()).map((w) => w.number);
+    return html`<${Scanner} onDone=${onDone} onClose=${() => go(`#/vykaz/${report.id}`, true)} position=${position} known=${known} />`;
   }
   return html`<${ReportView} report=${report} save=${save} />`;
 }

@@ -74,23 +74,26 @@ const GROUP_ENDS = new Set([2, 4, 8, 11, 12]);
  * Najde v přečtených řádcích (výstup readText) možná čísla vozů – i rozdělená do více řádků.
  * Vrací [{ number, valid, sure, score, lines }] od nejpravděpodobnějšího; valid = sedí kontrolní číslice,
  * lines = indexy řádků, ze kterých se číslo složilo.
+ * known = indexWagons(čísla známých vozů): doplní začátek čísla, který se na voze nepřečetl (filled).
  */
-export function numberCandidates(lines) {
+export function numberCandidates(lines, known) {
   const tokens = digitTokens(lines);
   const found = new Map();
-  // block = složeno z rozložení na voze (dvojčíslí + osm číslic v jednom řádku), rozdělení do skupin je tím dané
-  const add = (number, parts, aligned, block = false) => {
+  // block = složeno z rozložení na voze (dvojčíslí + osm číslic v jednom řádku), rozdělení do skupin je tím dané;
+  // filled = začátek čísla doplněný ze známých vozů: 'vuz' = vůz se stejným koncem čísla, 'rada' = jen podle řady
+  const add = (number, parts, aligned, block = false, filled = null) => {
     const valid = isValidCheckDigit(number);
     const country = COUNTRIES.has(Number(number.slice(2, 4)));
     let n = 0;
     const grouped = block || (aligned && parts.every((t) => GROUP_ENDS.has((n += t.d.length))));
     const rows = parts.at(-1).row - parts[0].row;
     const score = parts.reduce((a, t) => a + t.conf, 0) / parts.length - rows * 0.3
-      + (valid ? 10 : 0) + (country ? 2 : 0) + (grouped ? 2 : aligned ? 1 : 0);
-    // „jisté“ číslo: sedí kontrolní číslice, kód státu i rozdělení do skupin (náhodná shoda je velmi vzácná)
-    const sure = valid && country && grouped;
+      + (valid ? 10 : 0) + (country ? 2 : 0) + (grouped ? 2 : aligned ? 1 : 0) - (filled === 'rada' ? 3 : 0);
+    // „jisté“ číslo: sedí kontrolní číslice, kód státu i rozdělení do skupin (náhodná shoda je velmi vzácná);
+    // začátek doplněný jen podle řady jisté není (stejnou řadu mívají vozy různých držitelů)
+    const sure = valid && country && grouped && filled !== 'rada';
     const prev = found.get(number);
-    if (!prev || prev.score < score) found.set(number, { number, valid, sure, score, lines: [...new Set(parts.map((t) => t.li))] });
+    if (!prev || prev.score < score) found.set(number, { number, valid, sure, score, lines: [...new Set(parts.map((t) => t.li))], ...(filled ? { filled } : {}) });
   };
   for (let i = 0; i < tokens.length; i++) {
     let all = '';
@@ -113,18 +116,67 @@ export function numberCandidates(lines) {
       }
     }
   }
-  for (const [a, b, body] of numberBlocks(lines, tokens)) add(a.d + b.d + body.map((t) => t.d).join(''), [a, b, ...body], true, true);
+  const blocks = numberBlocks(lines, tokens);
+  for (const [a, b, body] of blocks.out) add(a.d + b.d + body.map((t) => t.d).join(''), [a, b, ...body], true, true);
+  // Začátek čísla, který se na voze nepřečetl (přetřené nebo vybledlé „83“ nad „54 CZ-VDSP“ / „6836 052-3“), se doplní
+  // ze známých vozů: tělo (5.–12. číslice, kontrolní číslice v něm) shodné s jediným známým vozem = jisté číslo,
+  // jinak se jen nabídnou začátky vozů stejné řady (5.–8. číslice), se kterými sedí kontrolní číslice.
+  if (known) {
+    // i tělo rozdělené do obdélníků vedle sebe („6836“ „052-3“): po sobě jdoucí slova jednoho řádku s osmi číslicemi
+    const split = [];
+    for (let i = 0; i < tokens.length; i++) {
+      let n = 0;
+      let j = i;
+      while (j < tokens.length && tokens[j].row === tokens[i].row && n < 8) n += tokens[j++].d.length;
+      const body = tokens.slice(i, j);
+      if (n !== 8 || tokens[i].d.length < 3 || new Set(body.map((t) => t.li)).size < 2) continue;
+      split.push({ body, cc: tokens.slice(0, i).reverse().find((t) => t.first && t.d.length === 2 && t.row === tokens[i].row - 1) ?? null });
+    }
+    for (const { body, cc } of [...blocks.bodies, ...split]) {
+      const b = body.map((t) => t.d).join('');
+      const parts = cc ? [cc, ...body] : body;
+      const same = known.body.get(b) ?? [];
+      // kód státu přečtený nad tělem nebo před ním vybere mezi vozy se stejným tělem (sám může být přečtený špatně)
+      const pick = same.length === 1 ? same : same.filter((x) => x.slice(2, 4) === cc?.d);
+      if (pick.length === 1) {
+        if (!found.has(pick[0])) add(pick[0], parts, true, true, 'vuz');
+        continue;
+      }
+      const offers = same.length ? same : [...(known.series.get(b.slice(0, 4)) ?? [])].map((p) => p + b).filter(isValidCheckDigit);
+      const own = offers.filter((x) => x.slice(2, 4) === cc?.d);
+      for (const x of (own.length ? own : offers).slice(0, 3)) if (!found.has(x)) add(x, parts, true, true, 'rada');
+    }
+  }
   return [...found.values()].sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Rejstřík známých čísel vozů (evidence, paměť vozů) pro numberCandidates: body = 5.–12. číslice → čísla vozů,
+ * series = 5.–8. číslice (řada) → první čtyři číslice vozů té řady.
+ */
+export function indexWagons(numbers) {
+  const body = new Map();
+  const series = new Map();
+  for (const n of new Set(numbers)) {
+    if (!/^\d{12}$/.test(n) || !isValidCheckDigit(n)) continue;
+    if (!body.has(n.slice(4))) body.set(n.slice(4), []);
+    body.get(n.slice(4)).push(n);
+    if (!series.has(n.slice(4, 8))) series.set(n.slice(4, 8), new Set());
+    series.get(n.slice(4, 8)).add(n.slice(0, 4));
+  }
+  return { body, series };
 }
 
 /**
  * Číslo podle rozložení na voze, nezávisle na pořadí řádků (na novějších vozech „33 RIV“ / „80 D-TWA“ / „2742 187-8“:
  * při mírném náklonu se řádky slijí a pořadí se pomíchá, mezi části vlezou cizí číslice). Tělo = osm číslic
  * v jednom řádku (i rozdělených „495 6 322-2“); před ním dvě dvojčíslí, každé na začátku svého řádku:
- * pod sebou zarovnaná vlevo s tělem (nad ním), nebo vlevo od těla ve stejném řádku. Vrací [[a, b, tělo]].
+ * pod sebou zarovnaná vlevo s tělem (nad ním), nebo vlevo od těla ve stejném řádku. Vrací out = [[a, b, tělo]]
+ * a bodies = [{ body, cc }] – každé tělo s dvojčíslím těsně nad ním nebo před ním (kód státu), pokud je.
  */
 function numberBlocks(lines, tokens) {
   const out = [];
+  const bodies = [];
   const box = (t) => lines[t.li];
   // svislá poloha kolmo na převažující sklon řádků (jako sortLines v ocr.js): na šikmém snímku jsou řádky
   // „33 RIV“ / „80 D-TWA“ / tělo podle středů obdélníků skoro ve stejné výšce
@@ -158,9 +210,12 @@ function numberBlocks(lines, tokens) {
       const left = [...near.filter((p) => Math.abs(cy(p) - yb) < Math.max(p.h, h) * 0.5 && box(p).x + box(p).w <= B.x + h * 0.3
         && B.x - box(p).x < Math.max(p.h, h) * 8).sort((p, q) => box(p).x - box(q).x), ...own.slice(0, i).filter((t) => t.d.length === 2)];
       if (left.length >= 2) out.push([left.at(-2), left.at(-1), body]);
+      // kód státu: nejbližší dvojčíslí nad tělem (do 1,5 výšky těla), jinak vlevo ve stejném řádku
+      const up = above.filter((p) => yb - cy(p) > p.h * 0.5 && yb - cy(p) < h * 1.5).at(-1);
+      bodies.push({ body, cc: up ?? left.at(-1) ?? null });
     }
   }
-  return out;
+  return { out, bodies };
 }
 
 // ───── Přestavovače a brzda ─────
