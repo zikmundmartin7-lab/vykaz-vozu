@@ -139,15 +139,37 @@ export function PhotoButton({ onPhoto, children, class: cls = 'btn', disabled })
 }
 
 /** Náhled fotky z IndexedDB (Blob). */
+/**
+ * Obrázek z Blobu. Safari v iPhonu občas fotku přečtenou z databáze nezobrazí (černo s otazníkem), i když data
+ * v pořádku jsou – pak se zobrazí kopie jejích bajtů; onError až když nejdou přečíst ani ty.
+ */
 export function BlobImg({ blob, alt = '', onError }) {
   const [url, setUrl] = useState(null);
+  const copy = useRef(null);
   useEffect(() => {
     if (!blob) return undefined;
     const u = URL.createObjectURL(blob);
+    copy.current = null;
     setUrl(u);
-    return () => URL.revokeObjectURL(u);
+    return () => {
+      URL.revokeObjectURL(u);
+      if (copy.current && copy.current !== 'pending') URL.revokeObjectURL(copy.current);
+    };
   }, [blob]);
-  return url ? html`<img src=${url} alt=${alt} onError=${onError} />` : null;
+  async function failed() {
+    if (copy.current) return copy.current === 'pending' ? undefined : onError?.();
+    copy.current = 'pending';
+    try {
+      const u = URL.createObjectURL(new Blob([await blob.arrayBuffer()], { type: blob.type || 'image/jpeg' }));
+      copy.current = u;
+      setUrl(u);
+    } catch {
+      copy.current = 'failed';
+      onError?.();
+    }
+    return undefined;
+  }
+  return url ? html`<img src=${url} alt=${alt} onError=${failed} />` : null;
 }
 
 // ───── krátké hlášky dole ─────

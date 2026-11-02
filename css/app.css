@@ -213,6 +213,17 @@ button.chip { cursor: pointer; font-size: .95rem; padding: .35rem .7rem; }
 
 .trainer .still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
 .boxes { position: absolute; inset: 0; pointer-events: none; }
+/* rámeček „zblízka“ u kroků pro síť na polohu: ukazuje velikost, síť ale vidí celý snímek (proto bez ztmavení okolí);
+   vlevo od seznamu kroků */
+.closeup {
+  position: absolute; left: calc((100% - 150px) / 2); top: 42%; width: min(calc(100% - 180px), 46vh); aspect-ratio: 1;
+  transform: translate(-50%, -50%); pointer-events: none;
+  border: 3px dashed rgba(255, 212, 59, .9); border-radius: 18px;
+}
+.closeup span {
+  position: absolute; left: 50%; top: -.4rem; transform: translate(-50%, -100%); white-space: nowrap;
+  padding: .2rem .55rem; border-radius: 8px; background: rgba(0, 0, 0, .6); color: #ffd43b; font-size: .8rem; font-weight: 700;
+}
 .box {
   position: absolute; pointer-events: auto; padding: 0; cursor: pointer;
   border: 2px solid rgba(255, 255, 255, .75); border-radius: 4px; background: rgba(255, 255, 255, .06);

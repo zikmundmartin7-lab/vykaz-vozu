@@ -134,7 +134,7 @@ function SampleImage({ s }) {
   const ocr = s.ocr;
   const hit = new Set([...(s.match ?? []), ...Object.values(s.match_extra ?? {}).flat()]);
   if (!s.blob || s.broken || failed) {
-    return html`<div class="notice warn">Fotka se v telefonu poškodila – zobrazit ani znovu vyexportovat ji nejde. Hodnotu opravit,
+    return html`<div class="notice warn">Fotku v telefonu nejde přečíst – zobrazit ani znovu vyexportovat ji nejde. Hodnotu opravit,
       přesunout k jinému vozu i dát do koše jde dál${s.exported_once || s.exported_at
         ? '; v Colabu je fotka z dřívějšího exportu.' : '. Vyexportovaná nebyla, do tréninku se nedostane.'}</div>`;
   }

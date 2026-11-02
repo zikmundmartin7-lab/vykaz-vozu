@@ -118,6 +118,10 @@ const ORDER_KEY = 'vykaz:trenink-poradi';
 // nápis samočinného brzdění „KE-GP-A MAX: 58 t“ (bývá uprostřed podélníku u značky špalíků).
 const CATCH = ['cislo', 'tare', 'hand_kn', 'length', 'speed', 'revize', 'naklad'];
 
+// Kroky, jejichž snímek se učí síť na polohu: síť vidí celou fotku zmenšenou na 224 × 224 bodů, páka (značka
+// špalíků) focená z dálky z ní je pár bodů (1. trénink 2. 11.: G i LL z dálky nepoznala) → rámeček a pokyn zblízka.
+const CLOSEUP = { rezim: 'Páka', naklad: 'Páka', kohout: 'Páka', rucni: 'Páka', blocks: 'Značka špalíků' };
+
 // Uložené pořadí kroků; nové kroky z pozdějších verzí se zařadí za krok, za kterým jsou ve výchozím pořadí,
 // zrušené vypadnou. Odvozené údaje (nápravy z čísla) vlastní krok nemají.
 function loadOrder() {
@@ -235,6 +239,7 @@ export function Trainer({ onClose }) {
   live.current = { key: current, frozen, touched, plateTouched, gain: light.gain, info, values };
 
   const field = current ? FIELD[current] : null;
+  const closeup = field ? CLOSEUP[field.key] : null;
   const done = !field;
 
   // kamera a průběžné čtení
@@ -937,6 +942,7 @@ export function Trainer({ onClose }) {
       <video ref=${videoRef} playsinline muted autoplay hidden=${camera !== 'live' || frozen} style=${light.filter}></video>
       <canvas ref=${stillRef} class="still" hidden=${!frozen}></canvas>
       <div class="boxes">${boxes}</div>
+      ${closeup && camera === 'live' && !frozen && html`<div class="closeup" aria-hidden="true"><span>${closeup} ať vyplní rámeček</span></div>`}
       ${flash && html`<div class="flash" key=${flash.key}></div>
         <div class="saved-shot" key=${`s${flash.key}`}><img src=${flash.url} alt="" />
           <div><b>Uloženo pro trénink</b><span>${flash.text}</span></div></div>`}
@@ -954,7 +960,8 @@ export function Trainer({ onClose }) {
         <div class="ask-title">${field.title}</div>
         <div class="ask-hint">${!ready ? 'Načítám rozpoznávání…'
           : caughtFrom ? html`<b>Přečteno už při kroku ${FIELD[caughtFrom].short}</b> – zkontrolujte a potvrďte${
-            back.current && back.current !== current ? `, pak zpět na ${FIELD[back.current].short}` : ''}.` : field.hint}</div>
+            back.current && back.current !== current ? `, pak zpět na ${FIELD[back.current].short}` : ''}.`
+          : closeup ? `${field.hint ? `${field.hint} – ` : ''}zblízka: ${closeup.toLowerCase()} ať vyplní rámeček` : field.hint}</div>
       </div>`}
     </div>
 
