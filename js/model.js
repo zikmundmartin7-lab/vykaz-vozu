@@ -43,15 +43,20 @@ const DECIMAL = /\b\d+,\d+\b|\b\d{1,2}\.\d+\b/g;
 // Kód státu bývá nalepený na značku držitele („80D-DB“, „54CZ-ČDC“) – oddělí se, jinak by se D četlo jako 0.
 const KEEPER = /(\d)(?=\p{Lu}{1,3}-\p{Lu}{2})/gu;
 
+// Řádky s telefonem, e-mailem nebo adresou držitele („D-55252 Mainz-Kastel“, „+496134/94844-0“) – jejich číslice
+// složily na jednom voze falešné číslo s platnou kontrolní číslicí.
+const CONTACT = /\+\s?\d|@|\b(tel|fax|e-?mail|www|gmbh|str(aße|asse)?\.?)\b|\b[A-Z]-\d{4,5}\b/i;
+
 function digitTokens(lines) {
   const tokens = [];
   for (const [li, l] of lines.entries()) {
+    if (CONTACT.test(l.text)) continue;
     for (const word of l.text.replace(DECIMAL, ' ').replace(KEEPER, '$1 ').split(/[^0-9A-Za-z|!]+/)) {
       const digits = word.replace(/\D/g, '').length;
       if (!digits || digits / word.length < 0.6) continue;
       const d = [...word].map((c) => (/\d/.test(c) ? c : LOOKALIKE[c] ?? '')).join('');
       // výška písma: u narovnaného řádku jeho tloušťka (obdélník šikmého řádku je vyšší než písmo)
-      tokens.push({ d, li, row: l.row ?? 0, h: l.th ?? l.h ?? 1, conf: l.conf ?? 0 });
+      tokens.push({ d, li, row: l.row ?? 0, h: l.th ?? l.h ?? 1, conf: l.conf ?? 0, first: !tokens.some((t) => t.li === li) });
     }
   }
   return tokens;
@@ -68,11 +73,12 @@ const GROUP_ENDS = new Set([2, 4, 8, 11, 12]);
 export function numberCandidates(lines) {
   const tokens = digitTokens(lines);
   const found = new Map();
-  const add = (number, parts, aligned) => {
+  // block = složeno z rozložení na voze (dvojčíslí + osm číslic v jednom řádku), rozdělení do skupin je tím dané
+  const add = (number, parts, aligned, block = false) => {
     const valid = isValidCheckDigit(number);
     const country = COUNTRIES.has(Number(number.slice(2, 4)));
     let n = 0;
-    const grouped = aligned && parts.every((t) => GROUP_ENDS.has((n += t.d.length)));
+    const grouped = block || (aligned && parts.every((t) => GROUP_ENDS.has((n += t.d.length))));
     const rows = parts.at(-1).row - parts[0].row;
     const score = parts.reduce((a, t) => a + t.conf, 0) / parts.length - rows * 0.3
       + (valid ? 10 : 0) + (country ? 2 : 0) + (grouped ? 2 : aligned ? 1 : 0);
@@ -102,7 +108,54 @@ export function numberCandidates(lines) {
       }
     }
   }
+  for (const [a, b, body] of numberBlocks(lines, tokens)) add(a.d + b.d + body.map((t) => t.d).join(''), [a, b, ...body], true, true);
   return [...found.values()].sort((a, b) => b.score - a.score);
+}
+
+/**
+ * Číslo podle rozložení na voze, nezávisle na pořadí řádků (na novějších vozech „33 RIV“ / „80 D-TWA“ / „2742 187-8“:
+ * při mírném náklonu se řádky slijí a pořadí se pomíchá, mezi části vlezou cizí číslice). Tělo = osm číslic
+ * v jednom řádku (i rozdělených „495 6 322-2“); před ním dvě dvojčíslí, každé na začátku svého řádku:
+ * pod sebou zarovnaná vlevo s tělem (nad ním), nebo vlevo od těla ve stejném řádku. Vrací [[a, b, tělo]].
+ */
+function numberBlocks(lines, tokens) {
+  const out = [];
+  const box = (t) => lines[t.li];
+  // svislá poloha kolmo na převažující sklon řádků (jako sortLines v ocr.js): na šikmém snímku jsou řádky
+  // „33 RIV“ / „80 D-TWA“ / tělo podle středů obdélníků skoro ve stejné výšce
+  const angles = lines.map((l) => l.angle).filter((a) => a != null).sort((a, b) => a - b);
+  const tilt = angles.length ? angles[Math.floor(angles.length / 2)] : 0;
+  const cy = (t) => -(box(t).x + box(t).w / 2) * Math.sin(tilt) + (box(t).y + box(t).h / 2) * Math.cos(tilt);
+  const pairs = tokens.filter((t) => t.first && t.d.length === 2);
+  for (const li of new Set(tokens.map((t) => t.li))) {
+    const own = tokens.filter((t) => t.li === li);
+    // tělo: souvislá část slov řádku s právě osmi číslicemi (4-3-1, s rozdělením, které čtení přidá)
+    for (let i = 0; i < own.length; i++) {
+      let n = 0;
+      let j = i;
+      while (j < own.length && n < 8) n += own[j++].d.length;
+      if (n !== 8 || own[i].d.length < 3) continue;
+      const body = own.slice(i, j);
+      const B = box(body[0]);
+      const h = body[0].h;
+      const yb = cy(body[0]);
+      // dvojčíslí bývají menším písmem než tělo (na vozech TSI zhruba polovičním)
+      const near = pairs.filter((p) => p.li !== li && Math.max(p.h, h) / Math.min(p.h, h) < 2.6);
+      // pod sebou: nad tělem, levý okraj do 1,5 výšky těla od levého okraje těla; řádky od sebe aspoň
+      // půl výšky svého písma, nejvýš 3 výšky těla
+      const above = near.filter((p) => cy(p) < yb && Math.abs(box(p).x - B.x) < h * 1.5).sort((p, q) => cy(p) - cy(q));
+      for (let k = 0; k + 1 < above.length; k++) {
+        const [a, b] = [above[k], above[k + 1]];
+        if (cy(b) - cy(a) > a.h * 0.5 && yb - cy(b) > b.h * 0.5 && yb - cy(a) < h * 3) out.push([a, b, body]);
+      }
+      // v jednom řádku: dvě dvojčíslí vlevo od těla ve stejné výšce (samostatné rámečky v pořadí zleva,
+      // pak dvojčíslí na začátku řádku těla „52 495 6 322-2“)
+      const left = [...near.filter((p) => Math.abs(cy(p) - yb) < Math.max(p.h, h) * 0.5 && box(p).x + box(p).w <= B.x + h * 0.3
+        && B.x - box(p).x < Math.max(p.h, h) * 8).sort((p, q) => box(p).x - box(q).x), ...own.slice(0, i).filter((t) => t.d.length === 2)];
+      if (left.length >= 2) out.push([left.at(-2), left.at(-1), body]);
+    }
+  }
+  return out;
 }
 
 // ───── Přestavovače a brzda ─────
