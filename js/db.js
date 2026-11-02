@@ -36,6 +36,20 @@ const all = (store) => run(store, 'readonly', (s) => s.getAll());
 const put = (store, value) => run(store, 'readwrite', (s) => s.put(value));
 const del = (store, key) => run(store, 'readwrite', (s) => s.delete(key));
 
+/**
+ * Fotka přečtená z databáze se při přepsání záznamu zapisuje jako nová kopie: Safari v iPhonu jinak po přepsání
+ * záznamu tímtéž Blobem fotku ztratí (černý náhled s otazníkem) a další zápis záznamu selže. Nečitelná fotka
+ * se nezapíše (blob null, broken) – údaje k ní zůstanou a v Colabu je fotka z dřívějšího exportu.
+ */
+async function freshBlob(s) {
+  if (!s.blob) return s;
+  try {
+    return { ...s, blob: new Blob([await s.blob.arrayBuffer()], { type: s.blob.type || 'image/jpeg' }) };
+  } catch {
+    return { ...s, blob: null, broken: true };
+  }
+}
+
 export const db = {
   reports: async () => (await all('reports')).sort((a, b) => b.created_at.localeCompare(a.created_at)),
   report: (id) => get('reports', id),
@@ -55,16 +69,16 @@ export const db = {
   addSample: (s) => put('samples', s),
   sample: (id) => get('samples', id),
   samples: () => all('samples'),
-  updateSample: (s) => put('samples', s),
+  updateSample: async (s) => put('samples', await freshBlob(s)),
   trashSample: async (s, fromTraining = false) => {
     const inColab = s.exported_once || Boolean(s.exported_at);
-    return put('samples', { ...s, deleted_at: new Date().toISOString(),
-      ...(fromTraining && inColab ? { removed: true, exported_at: null, exported_once: true } : {}) });
+    return put('samples', await freshBlob({ ...s, deleted_at: new Date().toISOString(),
+      ...(fromTraining && inColab ? { removed: true, exported_at: null, exported_once: true } : {}) }));
   },
   // fotka vyřazená z Colabu se po obnovení musí vyexportovat znovu
   restoreSample: async (s) => {
     const { deleted_at, removed, ...rest } = s;
-    return put('samples', removed ? { ...rest, exported_at: null } : rest);
+    return put('samples', await freshBlob(removed ? { ...rest, exported_at: null } : rest));
   },
   purgeSample: (id) => del('samples', id),
 };
@@ -82,13 +96,13 @@ export async function migrateHandBrake(old) {
     const changed = (s.kind === 'hand_frame' && old[s.label]) || old[s.extra?.hand_brake] || old[s.predicted?.hand_brake]
       || (s.kind === 'hand_frame' && old[s.predicted?.label]);
     if (!changed) continue;
-    await put('samples', {
+    await put('samples', await freshBlob({
       ...s,
       label: s.kind === 'hand_frame' ? fix(s.label) : s.label,
       extra: s.extra ? { ...s.extra, hand_brake: fix(s.extra.hand_brake) } : s.extra,
       predicted: s.predicted ? { ...s.predicted, ...(s.predicted.hand_brake ? { hand_brake: fix(s.predicted.hand_brake) } : {}),
         ...(s.kind === 'hand_frame' && s.predicted.label ? { label: fix(s.predicted.label) } : {}) } : s.predicted,
-    });
+    }));
   }
   for (const r of await all('reports')) {
     if (!r.entries?.some((e) => old[e.hand_brake])) continue;

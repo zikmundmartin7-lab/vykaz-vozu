@@ -3,8 +3,8 @@
 // (pro Google Disk a sešit v Colabu) a úklid přes koš.
 
 import { html, useEffect, useState } from '../../vendor/preact-htm.js';
-import { SWITCHES, plural, formatDate, formatDateTime, formatNumber } from '../model.js';
-import { FIELDS, FIELD, HAND_BRAKE, LOAD_LABELS, displayValue, parseRevision } from '../fields.js';
+import { SWITCHES, plural, formatDate, formatDateTime, formatTime, formatNumber, digitsOnly, isCompleteNumber, isValidCheckDigit } from '../model.js';
+import { FIELDS, FIELD, HAND_BRAKE, HAND_T, LOAD_LABELS, displayValue, parseRevision } from '../fields.js';
 import { db } from '../db.js';
 import { brakeModels } from '../brake.js';
 import { seriesInfo } from '../series.js';
@@ -36,6 +36,11 @@ const MIN_PHOTOS = 8;
 /** Hodnota snímku k zobrazení (poloha, číslo vozu s mezerami, hmotnost s jednotkou…). */
 function labelText(s) {
   if (OPTIONS[s.kind]) return optionText(s.kind, s.label);
+  // hmotnost s tím, co je pod ní: síla zajišťovací brzdy v t, nebo že vůz ruční brzdu nemá
+  if (s.kind === 'tare') {
+    const t = s.extra?.hand_t ? displayValue(HAND_T, s.extra.hand_t) : s.extra?.hand_brake === 'nema' ? 'bez RB' : '';
+    return [displayValue(FIELD.tare, s.label) || s.label, t].filter(Boolean).join(' · ');
+  }
   if (FIELD[s.kind]) return displayValue(FIELD[s.kind], s.label) || s.label;
   return s.label || '—';
 }
@@ -60,6 +65,23 @@ function conflicts(samples) {
   return out;
 }
 
+/**
+ * Snímky téhož vozu nafocené v jedné dávce se snímkem s (mezery do 3 min) – bez něj. Když se u vozu
+ * nepotvrdilo nové číslo, uloží se celá dávka pod předchozím vozem; přesouvá se pak najednou.
+ */
+function batchOf(s, samples) {
+  if (!s.wagon) return [];
+  const list = samples.filter((x) => x.wagon === s.wagon).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  let i = list.findIndex((x) => x.id === s.id);
+  if (i < 0) return [];
+  const gap = (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) > 3 * 60000;
+  let from = i;
+  while (from > 0 && !gap(list[from - 1], list[from])) from--;
+  let to = i;
+  while (to < list.length - 1 && !gap(list[to], list[to + 1])) to++;
+  return list.slice(from, to + 1).filter((x) => x.id !== s.id);
+}
+
 /** Je druh připravený k tréninku? Aspoň dvě polohy s MIN_PHOTOS snímky; jinak co chybí. */
 function readiness(kind, counts) {
   const opts = OPTIONS[kind].map(([v]) => v);
@@ -79,6 +101,7 @@ const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 // už vyexportované) jsou v něm jen řádkem se smazano = 1, bez fotky – sešit je vynechá i ze starších ZIPů.
 async function buildZip(samples) {
   const files = [];
+  let missing = 0;
   const csv = [['soubor', 'druh', 'hodnota', 'vuz', 'porizeno', 'zdroj', 'odhad', 'jistota', 'dalsi', 'smazano'].join(';')];
   for (const s of samples) {
     const dir = OPTIONS[s.kind] ? `${s.kind}/${s.label}` : s.kind;
@@ -87,7 +110,11 @@ async function buildZip(samples) {
       csv.push([name, s.kind, s.label, s.wagon, s.created_at, s.source ?? 'karta', '', '', '', '1'].map(csvCell).join(';'));
       continue;
     }
-    files.push({ name, data: new Uint8Array(await s.blob.arrayBuffer()) });
+    // poškozená fotka (blob null nebo nečitelný): jde jen řádek s hodnotou, sešit najde fotku v dřívějším ZIPu
+    let data = null;
+    try { data = s.blob ? new Uint8Array(await s.blob.arrayBuffer()) : null; } catch {}
+    if (data) files.push({ name, data });
+    else missing++;
     if (s.ocr) {
       const meta = { kind: s.kind, label: s.label, extra: s.extra, wagon: s.wagon, predicted: s.predicted,
         match: s.match, match_extra: s.match_extra, ocr: s.ocr };
@@ -98,15 +125,21 @@ async function buildZip(samples) {
       .map(csvCell).join(';'));
   }
   files.push({ name: 'labels.csv', data: enc.encode(`﻿${csv.join('\n')}\n`) });
-  return zip(files, 'application/zip');
+  return { zip: zip(files, 'application/zip'), missing };
 }
 
 /** Snímek s rámečky přečtených řádků: zeleně ten, který vozmistr potvrdil jako hledaný údaj. */
 function SampleImage({ s }) {
+  const [failed, setFailed] = useState(false);
   const ocr = s.ocr;
   const hit = new Set([...(s.match ?? []), ...Object.values(s.match_extra ?? {}).flat()]);
+  if (!s.blob || s.broken || failed) {
+    return html`<div class="notice warn">Fotka se v telefonu poškodila – zobrazit ani znovu vyexportovat ji nejde. Hodnotu opravit,
+      přesunout k jinému vozu i dát do koše jde dál${s.exported_once || s.exported_at
+        ? '; v Colabu je fotka z dřívějšího exportu.' : '. Vyexportovaná nebyla, do tréninku se nedostane.'}</div>`;
+  }
   return html`<div class="sample-img">
-    <${BlobImg} blob=${s.blob} />
+    <${BlobImg} blob=${s.blob} onError=${() => setFailed(true)} />
     ${ocr && html`<svg viewBox=${`0 0 ${ocr.w} ${ocr.h}`} preserveAspectRatio="none" aria-hidden="true">
       ${ocr.lines.map((l, i) => html`<rect x=${l.x} y=${l.y} width=${l.w} height=${l.h}
         class=${hit.has(i) ? 'hit' : ''} />`)}
@@ -118,25 +151,60 @@ function SampleImage({ s }) {
  * Detail snímku: co se uložilo, oprava hodnoty, přesun do koše; others = fotky téhož vozu s jinou hodnotou
  * (ukážou se pod ním k porovnání, ťuknutím se otevřou).
  */
-function SampleDetail({ s, others = [], onOpen, onClose, onChange }) {
+function SampleDetail({ s, others = [], batch = [], onOpen, onClose, onChange }) {
   const [label, setLabel] = useState(s.label ?? '');
-  useEffect(() => setLabel(s.label ?? ''), [s.id]);
-  const changed = label !== (s.label ?? '');
-  const inColab = s.exported_once || Boolean(s.exported_at);
+  // u hmotnosti i to, co je pod ní: síla zajišťovací brzdy (t) a barva rámečku (extra)
+  const [handT, setHandT] = useState(s.extra?.hand_t ?? '');
+  const [frame, setFrame] = useState(s.extra?.hand_brake ?? null);
+  const [moving, setMoving] = useState(false);
+  const [target, setTarget] = useState('');
+  const [withBatch, setWithBatch] = useState(true);
+  useEffect(() => { setLabel(s.label ?? ''); setHandT(s.extra?.hand_t ?? ''); setFrame(s.extra?.hand_brake ?? null); setMoving(false); }, [s.id]);
+  const isTare = s.kind === 'tare';
+  const tExtra = isTare ? { ...s.extra, hand_t: frame === 'nema' ? null : String(handT).replace(',', '.').trim() || null, hand_brake: frame } : s.extra;
+  const changed = label !== (s.label ?? '') || (isTare && JSON.stringify(tExtra) !== JSON.stringify({ ...s.extra, hand_t: s.extra?.hand_t ?? null, hand_brake: s.extra?.hand_brake ?? null }));
+  const inColab = (x) => x.exported_once || Boolean(x.exported_at);
+  // u fotky čísla je vůz to číslo, které je na ní
+  const asNumber = (x, number) => (x.kind === 'cislo' && number !== x.label
+    ? { label: number, relabeled_at: new Date().toISOString(), exported_at: null, exported_once: inColab(x) } : {});
+
+  // chyba zápisu (např. poškozená fotka ve starší verzi) se ohlásí – dřív tlačítko „nic nedělalo“
+  const attempt = async (fn) => {
+    try { await fn(); } catch (e) { toast(`Nepovedlo se uložit: ${e.message || e.name}`); }
+  };
 
   // opravená fotka jde znovu s „Exportovat nové“ – sešit bere hodnotu z posledního exportu, kde fotka je
-  async function save() {
-    await db.updateSample({ ...s, label, relabeled_at: new Date().toISOString(), exported_at: null, exported_once: inColab });
-    toast(inColab ? 'Hodnota opravena – do Colabu půjde s příštím exportem.' : 'Hodnota opravena.');
+  const save = () => attempt(async () => {
+    const number = digitsOnly(label);
+    await db.updateSample({ ...s, label, extra: tExtra, relabeled_at: new Date().toISOString(), exported_at: null, exported_once: inColab(s),
+      ...(s.kind === 'cislo' && number.length === 12 ? { label: number, wagon: number } : {}) });
+    toast(inColab(s) ? 'Hodnota opravena – do Colabu půjde s příštím exportem.' : 'Hodnota opravena.');
     onChange();
-  }
-  async function trash() {
-    if (!confirm(inColab ? 'Přesunout tento snímek do koše? Z tréninku v Colabu se vyřadí s příštím exportem (Exportovat nové).'
+  });
+  const trash = () => attempt(async () => {
+    if (!confirm(inColab(s) ? 'Přesunout tento snímek do koše? Z tréninku v Colabu se vyřadí s příštím exportem (Exportovat nové).'
       : 'Přesunout tento snímek do koše? Do tréninku pak nepůjde.')) return;
     await db.trashSample(s, true);
     toast('Snímek je v koši.');
     onChange();
-  }
+  });
+
+  // Přesun k jinému vozu: snímek (a snímky nafocené s ním v jedné dávce) byl uložen pod číslem jiného vozu.
+  // Návrh čísla: co je na fotce čísla z té dávky (opravená hodnota, jinak co aplikace přečetla).
+  const moveList = withBatch ? [s, ...batch] : [s];
+  const suggested = [s, ...batch].filter((x) => x.kind === 'cislo')
+    .map((x) => (x.label !== x.wagon ? x.label : x.predicted?.label)).find((n) => isCompleteNumber(n) && n !== s.wagon);
+  const targetNumber = digitsOnly(target);
+  const startMove = () => { setTarget(suggested ? formatNumber(suggested) : ''); setMoving(true); };
+  const move = () => attempt(async () => {
+    for (const x of moveList) await db.updateSample({ ...x, wagon: targetNumber, ...asNumber(x, targetNumber) });
+    toast(`${plural(moveList.length, 'snímek přesunut', 'snímky přesunuty', 'snímků přesunuto')} k vozu ${formatNumber(targetNumber)}.`);
+    onChange();
+  });
+  const span = (list) => {
+    const t = list.map((x) => x.created_at).sort();
+    return [formatTime(t[0]), formatTime(t.at(-1))].filter((v, i, a) => a.indexOf(v) === i).join('–');
+  };
 
   return html`<div class="sheet-backdrop" onClick=${(e) => e.target === e.currentTarget && onClose()}>
     <div class="sheet-panel">
@@ -150,13 +218,36 @@ function SampleDetail({ s, others = [], onOpen, onClose, onChange }) {
         ${[formatDateTime(s.created_at), s.source === 'trenink' ? 'z tréninku' : 'z karty vozu',
           s.exported_at ? 'vyexportováno' : inColab ? 'opraveno, zatím neexportováno' : 'zatím neexportováno'].join(' · ')}
         ${s.predicted?.label != null && html`<br />Aplikace četla: ${labelText({ ...s, label: s.predicted.label })}`}
-        ${s.extra && html`<br />Navíc: ${Object.entries(s.extra).filter(([, v]) => v != null).map(([k, v]) => `${LOAD_LABELS[k] ?? k} = ${v}`).join(', ')}`}
+        ${s.extra && !isTare && html`<br />Navíc: ${Object.entries(s.extra).filter(([, v]) => v != null).map(([k, v]) => `${LOAD_LABELS[k] ?? k} = ${v}`).join(', ')}`}
       </p>
+      ${!moving && html`<button class="linkbtn small" onClick=${startMove}>Snímek patří k jinému vozu…</button>`}
+      ${moving && html`<div class="compare" style="margin:.2rem 0 .8rem">
+        <div class="field-title">Číslo vozu, ke kterému snímek patří</div>
+        <input class="input" inputmode="numeric" autocomplete="off" value=${target} onInput=${(e) => setTarget(e.target.value)} />
+        <div class="hint">${targetNumber.length === 12
+          ? `${formatNumber(targetNumber)}${isValidCheckDigit(targetNumber) ? '' : ' – kontrolní číslice nesedí'}` : 'celé číslo vozu (12 číslic)'}</div>
+        ${batch.length > 0 && html`<label class="row small" style="gap:.5rem;margin:.5rem 0">
+          <input type="checkbox" checked=${withBatch} onChange=${(e) => setWithBatch(e.target.checked)} />
+          <span>i ${batch.length === 1 ? 'další snímek' : batch.length < 5 ? `další ${batch.length} snímky` : `dalších ${batch.length} snímků`}
+            vozu ${formatNumber(s.wagon)} nafocené s tímto (${span([s, ...batch])})</span></label>`}
+        <div class="row" style="margin-top:.5rem">
+          <button class="btn" onClick=${() => setMoving(false)}>Zrušit</button>
+          <span class="spacer"></span>
+          <button class="btn primary" disabled=${targetNumber.length !== 12 || targetNumber === s.wagon} onClick=${move}>
+            Přesunout ${plural(moveList.length, 'snímek', 'snímky', 'snímků')}</button>
+        </div>
+      </div>`}
       <div class="field-title">Hodnota, na které se síť učí</div>
       ${OPTIONS[s.kind]
         ? html`<${Seg} value=${label} options=${OPTIONS[s.kind]} onChange=${setLabel} />`
         : html`<input class="input" value=${label} onInput=${(e) => setLabel(e.target.value)} />
-            <div class="hint">${labelText({ ...s, label })}</div>`}
+            <div class="hint">${isTare ? displayValue(FIELD.tare, label) : labelText({ ...s, label })}</div>`}
+      ${isTare && html`
+        <div class="field-title">Rámeček pod hmotností (ruční brzda)</div>
+        <${Seg} value=${frame} options=${HAND_BRAKE} onChange=${setFrame} />
+        ${frame !== 'nema' && html`
+          <div class="field-title">Síla zajišťovací brzdy (t)</div>
+          <input class="input" inputmode="decimal" value=${String(handT ?? '').replace('.', ',')} onInput=${(e) => setHandT(e.target.value)} />`}`}
       <div class="row" style="margin-top:.8rem">
         <button class="btn danger" onClick=${trash}><${Icon} name="trash" size=${18} /> Do koše</button>
         <span class="spacer"></span>
@@ -189,7 +280,7 @@ function Gallery({ kind, list, onOpen, bad = {}, flat = false }) {
       ${items.slice(0, limit).map((s) => html`<button type="button" class=${`thumb ${bad[s.id] ? 'bad' : ''}`} onClick=${() => onOpen(s)}
         title=${bad[s.id] ? `${labelText(s)} – jiná fotka vozu: ${bad[s.id].map(labelText).join(', ')}` : labelText(s)}>
         <${BlobImg} blob=${s.blob} />
-        ${(flat || !OPTIONS[kind] || bad[s.id]) && html`<span>${bad[s.id] ? '⚠ ' : ''}${labelText(s)}</span>`}
+        ${(flat || !OPTIONS[kind] || bad[s.id] || !s.blob) && html`<span>${bad[s.id] ? '⚠ ' : ''}${labelText(s)}${s.blob ? '' : ' · poškozená'}</span>`}
       </button>`)}
     </div>
     ${items.length > limit && html`<button class="linkbtn small" onClick=${() => setLimit(limit + 48)}>Zobrazit další (${items.length - limit})</button>`}
@@ -209,7 +300,14 @@ export function DataView({ wagon = null }) {
   const [series, setSeries] = useState(null);
 
   const [all, setAll] = useState(null);
-  const load = () => db.samples().then((list) => setAll(list.sort((a, b) => b.created_at.localeCompare(a.created_at))));
+  const load = () => db.samples().then(async (list) => {
+    // fotky, které Safari v iPhonu ztratil (černý náhled s otazníkem), se ukážou jako poškozené
+    await Promise.all(list.map(async (s) => {
+      if (!s.blob) return;
+      try { await s.blob.slice(0, 4).arrayBuffer(); } catch { s.blob = null; s.broken = true; }
+    }));
+    setAll(list.sort((a, b) => b.created_at.localeCompare(a.created_at)));
+  });
   useEffect(() => { load(); brakeModels().then(setModels); }, []);
   useEffect(() => {
     setOpen(null);
@@ -233,8 +331,8 @@ export function DataView({ wagon = null }) {
   for (const s of samples) (byKind[s.kind] ??= []).push(s);
   const counts = (kind) => (byKind[kind] ?? []).reduce((c, s) => ((c[s.label] = (c[s.label] ?? 0) + 1), c), {});
   const clash = conflicts(samples);
-  const detail = open && html`<${SampleDetail} key=${open.id} s=${open} others=${clash[open.id] ?? []} onOpen=${setOpen}
-    onClose=${() => setOpen(null)} onChange=${() => { setOpen(null); load(); }} />`;
+  const detail = open && html`<${SampleDetail} key=${open.id} s=${open} others=${clash[open.id] ?? []} batch=${batchOf(open, samples)}
+    onOpen=${setOpen} onClose=${() => setOpen(null)} onChange=${() => { setOpen(null); load(); }} />`;
 
   if (wagon !== null) {
     const list = samples.filter((s) => (s.wagon || '-') === wagon);
@@ -272,7 +370,8 @@ export function DataView({ wagon = null }) {
     setBusy(true);
     try {
       const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
-      const file = new File([await buildZip(list)], `vykaz_data_${stamp}.zip`, { type: 'application/zip' });
+      const built = await buildZip(list);
+      const file = new File([built.zip], `vykaz_data_${stamp}.zip`, { type: 'application/zip' });
       if (how === 'share' && navigator.canShare?.({ files: [file] })) {
         // jen soubor, bez názvu a textu: aplikace Disk v iPhonu jinak uloží místo ZIPu jen text s názvem
         try { await navigator.share({ files: [file] }); } catch (e) { if (e.name === 'AbortError') { setBusy(false); return; } throw e; }
@@ -281,6 +380,7 @@ export function DataView({ wagon = null }) {
       for (const s of list) await db.updateSample({ ...s, exported_at: now, exported_once: true });
       const nGone = list.filter((s) => s.deleted_at).length;
       toast(`Vyexportováno ${plural(list.length - nGone, 'fotka', 'fotky', 'fotek')}${nGone ? `, vyřazeno ${nGone}` : ''}`
+        + `${built.missing ? `, ${built.missing} jen hodnotou (fotka v telefonu poškozená)` : ''}`
         + ` (${(file.size / 1048576).toLocaleString('cs-CZ', { maximumFractionDigits: 1 })} MB).`);
       await load();
     } catch (e) {
@@ -366,6 +466,10 @@ export function DataView({ wagon = null }) {
         </details>`;
       })}
       ${!samples.length && html`<div class="notice info">Zatím žádné snímky. Nasbírejte je tlačítkem Snímat pro trénink.</div>`}
+
+      ${samples.some((s) => !s.blob) && html`<div class="notice warn">Poškozené fotky v telefonu: <b>${samples.filter((s) => !s.blob).length}</b> (u náhledu
+        „poškozená“). Vyexportované jsou v Colabu z dřívějšího exportu; opravit hodnotu, přesunout k jinému vozu
+        i dát do koše jde dál.</div>`}
 
       <div class="card">
         <p style="margin-top:0">Nových a opravených fotek k exportu: <b>${fresh.length}</b> (celkem ${samples.length})${

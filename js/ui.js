@@ -139,7 +139,7 @@ export function PhotoButton({ onPhoto, children, class: cls = 'btn', disabled })
 }
 
 /** Náhled fotky z IndexedDB (Blob). */
-export function BlobImg({ blob, alt = '' }) {
+export function BlobImg({ blob, alt = '', onError }) {
   const [url, setUrl] = useState(null);
   useEffect(() => {
     if (!blob) return undefined;
@@ -147,7 +147,7 @@ export function BlobImg({ blob, alt = '' }) {
     setUrl(u);
     return () => URL.revokeObjectURL(u);
   }, [blob]);
-  return url ? html`<img src=${url} alt=${alt} />` : null;
+  return url ? html`<img src=${url} alt=${alt} onError=${onError} />` : null;
 }
 
 // ───── krátké hlášky dole ─────
