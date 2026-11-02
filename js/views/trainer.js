@@ -224,6 +224,8 @@ export function Trainer({ onClose }) {
   const [caught, setCaught] = useState({});          // údaje přečtené mimo svůj krok: klíč → { value, frame, from }
   const [caughtFrom, setCaughtFrom] = useState(null); // krok, při kterém se přečetl právě zobrazený údaj
   const flow = useRef(null);                          // krok, za kterým pokračuje pořadí po potvrzení přečtených údajů
+  const back = useRef(null);                          // krok, na který se vrátí po potvrzení údaje přečteného mimo něj
+  const offered = useRef(new Set());                  // kroky, jejichž přečtený údaj se už sám nabídl (znovu se nenabízí)
   const [busy, setBusy] = useState(false);
   const [, setTick] = useState(0);
   const light = useCameraLight();
@@ -441,6 +443,7 @@ export function Trainer({ onClose }) {
     const c = f && prev === undefined ? caughtNow[key] : null;
     setCaughtFrom(c?.from ?? null);
     if (c) {
+      offered.current.add(key);
       setFrame(c.frame);
       setFrozen(true);
       // návrh ze zapamatovaného snímku (i barva rámečku, roky revize); stav se překreslí až po tomto volání
@@ -449,14 +452,29 @@ export function Trainer({ onClose }) {
     }
   }
 
-  // Další nevyplněný krok v pořadí za tím současným (pak od začátku); vše vyplněné → souhrn.
-  // Přednost mají kroky s údajem přečteným už při jiném kroku – nabídnou se k potvrzení hned. Po nich
-  // pořadí pokračuje za krokem, který byl potvrzený před nimi (přeskočené kroky se tak neodsunou na konec).
+  // Údaj přečtený mimo právě snímaný krok se nabídne k potvrzení hned (na snímku, kde se přečetl), po jeho
+  // potvrzení se aplikace vrátí sem (nextKey). Ne, když vozmistr už v kroku něco zvolil nebo napsal (nabídne se
+  // po potvrzení), a sám každý údaj jen jednou. Z Fotky se nenabízí hned – snímek je zastavený a ukazuje tento krok.
+  useEffect(() => {
+    if (!field || frozen || touched || caughtFrom) return;
+    const k = order.find((x) => x !== current && values[x] === undefined && caught[x] && !offered.current.has(x));
+    if (!k) return;
+    back.current ??= current;
+    vibrate(100);
+    goTo(k);
+  }, [caught]);
+
+  // Kam po potvrzení: nejdřív další údaje přečtené mimo svůj krok, pak zpět na krok, od kterého se k nim odbočilo,
+  // jinak další nevyplněný krok v pořadí za tím, který byl potvrzený před nimi (pak od začátku); vše vyplněné → souhrn.
   function nextKey(vals) {
     if (!caughtFrom || !flow.current) flow.current = current;
     const i = order.indexOf(flow.current);
     const rest = [...order.slice(i + 1), ...order.slice(0, i + 1)].filter((k) => vals[k] === undefined);
-    return rest.find((k) => caught[k]) ?? rest[0] ?? null;
+    const pending = rest.find((k) => caught[k]);
+    if (pending) return pending;
+    const ret = back.current;
+    back.current = null;
+    return ret && vals[ret] === undefined ? ret : rest[0] ?? null;
   }
 
   function reorder(next) {
@@ -528,6 +546,20 @@ export function Trainer({ onClose }) {
     setTimeout(() => setFlash((f) => { if (f?.key !== key) return f; URL.revokeObjectURL(f.url); return null; }), 2600);
   }
 
+  // Trénovací snímek. Uložený dřív, než je potvrzené číslo vozu (přečtený údaj nabídnutý během snímání čísla),
+  // dostane číslo vozu dodatečně při jeho potvrzení (numberSamples).
+  const unnumbered = useRef([]);
+  async function addSample(s) {
+    await db.addSample(s);
+    if (!s.wagon) unnumbered.current.push(s.id);
+  }
+  async function numberSamples(number) {
+    for (const id of unnumbered.current.splice(0)) {
+      const s = await db.sample(id);
+      if (s && !s.wagon) await db.updateSample({ ...s, wagon: number });
+    }
+  }
+
   // dvojité ťuknutí na Potvrdit nesmí uložit snímek dvakrát
   const saving = useRef(false);
   async function confirm() {
@@ -543,7 +575,8 @@ export function Trainer({ onClose }) {
     if (field.type === 'force') return confirmForce();
     const value = field.type === 'switch' ? choice : normalizeValue(field, input);
     if (!isValidValue(field, value)) {
-      toast(field.type === 'number' ? 'Číslo vozu musí mít 12 číslic.' : 'Zadejte hodnotu, nebo zvolte „Na voze není“.');
+      toast(field.type === 'number' ? 'Číslo vozu musí mít 12 číslic.'
+        : `${field.type === 'switch' ? 'Zvolte jednu z možností' : 'Zadejte hodnotu'}${field.optional ? ', nebo zvolte „Na voze není“' : ''}.`);
       return;
     }
     if (field.type === 'number' && !isValidCheckDigit(value) && !confirmCheck(value)) return;
@@ -563,7 +596,7 @@ export function Trainer({ onClose }) {
     if (shot) {
       const small = shrink(shot);
       const blob = await new Promise((r) => small.canvas.toBlob(r, 'image/jpeg', 0.82));
-      await db.addSample({
+      await addSample({
         id: uid(),
         kind: field.key,
         label: value,
@@ -577,6 +610,7 @@ export function Trainer({ onClose }) {
       });
       announce(blob, `${field.title}: ${displayValue(field, value)}${field.type === 'number' ? ` · ${axlesText(Number(axles))}` : ''}`);
     }
+    if (field.type === 'number') await numberSamples(value);
     vibrate(50);
     const next = { ...values, [field.key]: value, ...(field.type === 'number' ? { axles } : {}) };
     setValues(next);
@@ -587,13 +621,13 @@ export function Trainer({ onClose }) {
   async function confirmWeight() {
     const tare = normalizeValue(field, input);
     const handT = normalizeValue(HAND_T, input2);
-    if (!tare) return toast('Zadejte vlastní hmotnost, nebo zvolte „Na voze není“.');
+    if (!tare) return toast('Zadejte vlastní hmotnost vozu.');
     if (!choice) return toast('Zvolte, odkud se ruční brzda obsluhuje (nebo že ji vůz nemá).');
     if (frame) {
       const small = shrink(frame);
       const blob = await new Promise((r) => small.canvas.toBlob(r, 'image/jpeg', 0.82));
       const tLines = cand2?.lines ?? [];
-      await db.addSample({
+      await addSample({
         id: uid(), kind: 'tare', label: tare, blob,
         wagon: values.cislo ?? '', created_at: new Date().toISOString(), source: 'trenink',
         predicted: cand ? { label: cand.value, hand_t: cand2?.value, hand_brake: frameColor?.value } : null,
@@ -617,7 +651,7 @@ export function Trainer({ onClose }) {
         c.height = Math.round(h * k);
         c.getContext('2d').drawImage(frame.canvas, x, y, w, h, 0, 0, c.width, c.height);
         const crop = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
-        await db.addSample({
+        await addSample({
           id: uid(), kind: 'hand_frame', label: choice, blob: crop, wagon: values.cislo ?? '',
           created_at: new Date().toISOString(), source: 'trenink',
           predicted: frameColor?.value ? { label: frameColor.value } : null,
@@ -626,6 +660,9 @@ export function Trainer({ onClose }) {
     }
     vibrate(50);
     const next = { ...values, tare, hand_t: choice === 'nema' ? null : handT || null, hand_brake: choice };
+    // bez rámečku (vůz nemá ruční brzdu) není ani zajišťovací síla – krok se přeskočí; po změně volby se zase nabídne
+    if (choice === 'nema') next.hand_kn = null;
+    else if (values.hand_brake === 'nema' && values.hand_kn === null) delete next.hand_kn;
     setValues(next);
     goTo(nextKey(next), next);
   }
@@ -635,7 +672,7 @@ export function Trainer({ onClose }) {
     if (!frame) return;
     const small = shrink(frame);
     const blob = await new Promise((res) => small.canvas.toBlob(res, 'image/jpeg', 0.82));
-    await db.addSample({
+    await addSample({
       id: uid(), kind: field.key, label: value, blob, wagon: values.cislo ?? '',
       created_at: new Date().toISOString(), source: 'trenink',
       predicted: cand ? { label: cand.value } : null,
@@ -694,7 +731,7 @@ export function Trainer({ onClose }) {
       const blob = await new Promise((r) => small.canvas.toBlob(r, 'image/jpeg', 0.82));
       // označené nápisy: ty, jejichž přečtená hodnota se shoduje s potvrzenou
       const match_extra = Object.fromEntries(LOAD_KEYS.filter((k) => lb[k] != null && cand?.values[k] === lb[k]).map((k) => [k, cand.at[k]]));
-      await db.addSample({
+      await addSample({
         id: uid(), kind: field.key, label: choice, blob, wagon: values.cislo ?? '',
         created_at: new Date().toISOString(), source: 'trenink',
         predicted: pred ? { label: pred.label, prob: pred.prob } : cand ? { ...(cand.auto ? { label: 'auto' } : {}), values: cand.values } : null,
@@ -722,9 +759,9 @@ export function Trainer({ onClose }) {
     return window.confirm(`U čísla ${formatNumber(value)} nesedí kontrolní číslice. Přesto uložit?`);
   }
 
+  // „Na voze není“ – jen u kroků, které na voze opravdu chybět mohou (field.optional: zajišťovací síla, G/P)
   function skip() {
-    const next = { ...values, [field.key]: null, ...(field.type === 'weight' ? { hand_t: null, hand_brake: null } : {}),
-      ...(field.type === 'loadbrake' ? { lb: null } : {}) };
+    const next = { ...values, [field.key]: null };
     setValues(next);
     goTo(nextKey(next), next);
   }
@@ -750,6 +787,9 @@ export function Trainer({ onClose }) {
     setCaught({});
     catchVote.current = {};
     flow.current = null;
+    back.current = null;
+    offered.current = new Set();
+    unnumbered.current = [];
     goTo(order[0], {}, {});
   }
 
@@ -796,10 +836,11 @@ export function Trainer({ onClose }) {
         ${st.until
           ? st.expired ? html`<b>⚠ Revize je prošlá – platila do ${formatDay(st.until)}.</b>`
             : html`Platí do <b>${formatDay(st.until)}</b>${st.soon ? ' – brzy vyprší' : ''}.`
-          : rev.date && !r.years ? 'Doplňte počet let z prvního rámečku.' : 'Namiřte na nápis revize.'}
+          : rev.date && !r.years ? 'Doplňte počet let z prvního rámečku.'
+            : 'Namiřte na obdélník revize (roky · dílna · datum) – datum mimo obdélník s buňkami se nebere.'}
       </div>
       <div class="hint">${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand.stable ? '' : ' (ověřuji…)'}${
-          cand.cells ? ` · obdélník: ${plural(cand.cells, 'buňka', 'buňky', 'buněk')}` : ''}` : ''}
+          cand.stacked ? ' · obdélník pod sebou' : cand.cells ? ` · obdélník: ${plural(cand.cells, 'buňka', 'buňky', 'buněk')}` : ''}` : ''}
         ${knownValue && html` · v paměti: ${knownValue}`}</div>`;
   }
 
@@ -909,7 +950,8 @@ export function Trainer({ onClose }) {
         <div class="ask-n">${order.indexOf(current) + 1} / ${order.length} · uloženo snímků: ${saved}${info ? ` · řada ${info.series}` : ''}</div>
         <div class="ask-title">${field.title}</div>
         <div class="ask-hint">${!ready ? 'Načítám rozpoznávání…'
-          : caughtFrom ? html`<b>Přečteno už při kroku ${FIELD[caughtFrom].short}</b> – zkontrolujte a potvrďte.` : field.hint}</div>
+          : caughtFrom ? html`<b>Přečteno už při kroku ${FIELD[caughtFrom].short}</b> – zkontrolujte a potvrďte${
+            back.current && back.current !== current ? `, pak zpět na ${FIELD[back.current].short}` : ''}.` : field.hint}</div>
       </div>`}
     </div>
 
@@ -944,7 +986,7 @@ export function Trainer({ onClose }) {
                 </div>
                 ${field.type === 'number' && axlesRow()}`}
           <div class="row" style="margin-top:.6rem">
-            <button class="btn" onClick=${skip}>Na voze není</button>
+            ${field.optional && html`<button class="btn" onClick=${skip}>Na voze není</button>`}
             <${PhotoButton} class="btn" onPhoto=${fromPhoto} disabled=${busy}><${Icon} name="camera" /> ${busy ? 'Čtu…' : 'Fotka'}</${PhotoButton}>
             <button class="btn ok" style="flex:1" onClick=${confirm}><${Icon} name="check" /> Potvrdit</button>
           </div>`}

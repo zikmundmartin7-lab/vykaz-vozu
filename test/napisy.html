@@ -84,6 +84,19 @@ function panel(g, x, y, h, cells, ink, lw = 4) {
   return total;
 }
 
+// obdélník pod sebou: nahoře roky | REV, pod nimi dílna, dole datum (každý řádek výšky h)
+function stacked(g, x, y, w, h, [years, workshop, date], ink, lw = 4) {
+  g.strokeStyle = ink;
+  g.lineWidth = lw;
+  g.strokeRect(x, y, w, h * 3);
+  for (const i of [1, 2]) { g.beginPath(); g.moveTo(x, y + h * i); g.lineTo(x + w, y + h * i); g.stroke(); }
+  g.beginPath(); g.moveTo(x + w * 0.25, y); g.lineTo(x + w * 0.25, y + h); g.stroke();
+  text(g, years, x + w * 0.125, y + h / 2 + 2, h * 0.55, ink, 'center');
+  text(g, 'REV', x + w * 0.625, y + h / 2 + 2, h * 0.55, ink, 'center');
+  text(g, workshop, x + w / 2, y + h * 1.5 + 2, h * 0.55, ink, 'center');
+  text(g, date, x + w / 2, y + h * 2.5 + 2, h * 0.55, ink, 'center');
+}
+
 function text(g, s, x, y, px, ink, align = 'left') {
   g.font = font(px);
   g.fillStyle = ink;
@@ -124,10 +137,24 @@ const REVISIONS = [
     const w = panel(g, 380, 420, 90, [{ w: 90, text: '6' }, { w: 260, text: 'ČD 22' }, { w: 330, text: '15.01.24' }], '#f2f2f2');
     text(g, '+2 M', 380 + w + 30, 467, 48, '#f2f2f2');
   } },
-  { name: 'revize: bez čar (původní pravidla)', want: '6|13.03.24|0', cells: 0, draw(g) {
+  // jen datum v obdélníku s buňkami – jiná data na voze se za revizi neberou
+  { name: 'revize: bez čar – nebere se', want: null, draw(g) {
     text(g, '6', 420, 467, 50, '#f2f2f2');
     text(g, 'ČD 22', 520, 467, 50, '#f2f2f2');
     text(g, '13.03.24', 740, 467, 50, '#f2f2f2');
+  } },
+  { name: 'revize: cizí datum nad obdélníkem', want: '6|13.03.24|0', cells: 3, draw(g) {
+    text(g, '05.06.25', 420, 300, 50, '#f2f2f2');
+    panel(g, 380, 420, 90, [{ w: 90, text: '6' }, { w: 260, text: 'ČD 22' }, { w: 330, text: '13.03.24' }], '#f2f2f2');
+  } },
+  { name: 'revize: datum v tabulce lhůt (v 1. buňce) – nebere se', want: null, draw(g) {
+    panel(g, 380, 420, 90, [{ w: 330, text: '11.10.25' }, { w: 200, text: 'EML' }], '#f2f2f2');
+  } },
+  { name: 'revize: obdélník pod sebou (4 REV / 504 / datum)', want: '4|14.04.24|0', cells: 0, draw(g) {
+    stacked(g, 560, 300, 300, 90, ['4', '504', '14.04.24'], '#f2f2f2');
+  } },
+  { name: 'revize: zkosení při focení zespodu (svislé čáry svislé)', want: '6|24.11.22|0', cells: 4, shear: 0.11, draw(g) {
+    panel(g, 340, 420, 90, [{ w: 90, text: '6' }, { w: 160, text: 'REV' }, { w: 180, text: 'EML' }, { w: 330, text: '24.11.22' }], '#f2f2f2');
   } },
 ];
 
@@ -178,7 +205,20 @@ const FORCES = [
 function render(sc) {
   const { c, g } = scene(1600, 900, sc.bg ?? ['#5a3a2a', '#3e2a20']);
   sc.draw(g);
-  return camera(sc.rotate ? rotate(c, sc.rotate) : c, sc.blur);
+  return camera(sc.rotate ? rotate(c, sc.rotate) : sc.shear ? shear(c, sc.shear) : c, sc.blur);
+}
+
+// zkosení jako při focení zespodu: vodorovné čáry a písmo šikmo, svislé čáry zůstanou svislé
+function shear(c, k) {
+  const d = document.createElement('canvas');
+  d.width = c.width;
+  d.height = c.height;
+  const g = d.getContext('2d');
+  g.fillStyle = '#555';
+  g.fillRect(0, 0, d.width, d.height);
+  g.setTransform(1, -k, 0, 1, 0, k * c.width / 2);
+  g.drawImage(c, 0, 0);
+  return d;
 }
 
 function show(c, ok) {

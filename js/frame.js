@@ -261,11 +261,13 @@ function lineCrop(canvas, box, pad) {
  * které vedou od horní k dolní (písmo do okrajů buňky nesahá). Hledá se v obraze – čáry rozpoznávání textu nečte.
  * Vrací null (obdélník nenalezen), nebo { cells: [{ x, y, w, h, rot? }] zleva – vnitřek buňky v souřadnicích snímku
  * (box pro readLine z ocr.js), dateCell – index buňky s datem, cellOf(line) – index buňky, ve které je střed
- * řádku textu, -1 = mimo obdélník }.
+ * řádku textu, -1 = mimo obdélník }. Obdélník pod sebou (datum v dolní buňce přes celou šířku):
+ * { cells: [], dateCell: 0, stacked: true, above(line) – nápis v buňkách nad datem, frameLeft – levý okraj ve snímku }.
  */
 export function revisionCells(canvas, box, debug = false) {
-  // vlevo od data bývá buňka s roky a buňka dílny (písmena), dohromady do ~6 výšek písma
-  const crop = lineCrop(canvas, box, { l: 9, r: 2, t: 1.5, b: 1.5 });
+  // vlevo od data bývá buňka s roky a buňka dílny (písmena), dohromady do ~6 výšek písma;
+  // nahoru víc – u obdélníku pod sebou je nad datem ještě buňka dílny a čára nad ní
+  const crop = lineCrop(canvas, box, { l: 9, r: 2, t: 3.5, b: 1.5 });
   if (!crop) return null;
   const { W, H, ink, th, cy, k, bx0, bx1, toSource, fromSource, a } = crop;
 
@@ -292,26 +294,73 @@ export function revisionCells(canvas, box, debug = false) {
   const iy1 = bot.y0 - 1;
   if (iy1 - iy0 < th * 0.8) return null;
 
-  // svislá čára: sloupec s ink skoro přes celý vnitřek, i v okraji buňky nad a pod písmem (dřík číslice tam nesahá)
+  // svislá čára: sloupec s ink skoro přes celý vnitřek, i v okraji buňky nad a pod písmem (dřík číslice tam nesahá).
+  // Při focení zespodu nebo zboku jsou svislé čáry proti narovnanému řádku písma skloněné – zkouší se proto
+  // i šikmé sloupce (sklon = posun x na řádek y, měřeno od středu vnitřku) a bere se sklon, při kterém je čar nejvíc.
   const tb = cy - 0.5 * th;
   const bb = cy + 0.5 * th;
-  const isLine = new Uint8Array(W);
-  for (let x = 0; x < W; x++) {
-    let n = 0, m = 0, mn = 0;
-    for (let y = iy0; y <= iy1; y++) {
-      const v = ink[y * W + x];
-      n += v;
-      if (y < tb - 1 || y > bb + 1) { m += v; mn++; }
+  const ym = (iy0 + iy1) / 2;
+  const inkNear = (x, y) => {
+    for (let d = -2; d <= 2; d++) {
+      const xx = Math.round(x + slope * (y - ym)) + d;
+      if (xx >= 0 && xx < W && ink[y * W + xx]) return true;
     }
-    isLine[x] = n >= (iy1 - iy0 + 1) * 0.85 && (mn < 3 || m >= mn * 0.8) ? 1 : 0;
+    return false;
+  };
+
+  // Obdélník pod sebou („4 REV“ / dílna / datum): datum je samo v buňce přes celou šířku a nad ní je další buňka
+  // stejně široká – nad čárou nad datem je ještě jedna vodorovná čára a obě boční čáry pokračují až k ní.
+  // Vrací { above(line) – nápis v buňkách nad datem (tam jsou roky), frameLeft – levý okraj obdélníku }, jinak null.
+  function stackedAbove([x0, x1]) {
+    const rowFracX = (y) => {
+      let n = 0;
+      for (let x = Math.round(x0); x <= x1; x++) n += ink[y * W + x];
+      return n / Math.max(1, x1 - x0 + 1);
+    };
+    let upper = -1;
+    for (let y = Math.round(top.y0 - 0.8 * th); y >= 0; y--) if (rowFracX(y) >= 0.6) { upper = y; break; }
+    if (upper < 0) return null;
+    const side = (x) => {
+      let n = 0;
+      for (let y = upper + 1; y < top.y0; y++) n += inkNear(x, y) ? 1 : 0;
+      return n >= (top.y0 - upper - 1) * 0.85;
+    };
+    if (!side(x0) || !side(x1)) return null;
+    const cell = bot.y1 - top.y0;
+    return {
+      above: (l) => {
+        const p = fromSource(l.x + l.w / 2, l.y + l.h / 2);
+        return p.X >= x0 && p.X <= x1 && p.Y < top.y0 && p.Y > top.y0 - 3.5 * cell;
+      },
+      frameLeft: toSource(x0, ym).x,   // levý okraj obdélníku ve snímku (kde začíná buňka s roky)
+    };
   }
-  const vlines = [];
-  for (let x = 0; x < W; x++) {
-    if (!isLine[x]) continue;
-    let e = x;
-    while (e + 1 < W && (isLine[e + 1] || (e + 2 < W && isLine[e + 2]))) e++;
-    if (e - x + 1 <= Math.max(3, 0.35 * th)) vlines.push((x + e) / 2);
-    x = e;
+  const columns = (s) => {
+    const isLine = new Uint8Array(W);
+    for (let x = 0; x < W; x++) {
+      let n = 0, m = 0, mn = 0;
+      for (let y = iy0; y <= iy1; y++) {
+        const xx = Math.round(x + s * (y - ym));
+        const v = xx >= 0 && xx < W ? ink[y * W + xx] : 0;
+        n += v;
+        if (y < tb - 1 || y > bb + 1) { m += v; mn++; }
+      }
+      isLine[x] = n >= (iy1 - iy0 + 1) * 0.85 && (mn < 3 || m >= mn * 0.8) ? 1 : 0;
+    }
+    const found = [];
+    for (let x = 0; x < W; x++) {
+      if (!isLine[x]) continue;
+      let e = x;
+      while (e + 1 < W && (isLine[e + 1] || (e + 2 < W && isLine[e + 2]))) e++;
+      if (e - x + 1 <= Math.max(3, 0.35 * th)) found.push((x + e) / 2);
+      x = e;
+    }
+    return found;
+  };
+  let vlines = [], slope = 0;
+  for (const s of [0, -0.05, 0.05, -0.1, 0.1, -0.15, 0.15, -0.2, 0.2, -0.25, 0.25]) {
+    const found = columns(s);
+    if (found.length > vlines.length) { vlines = found; slope = s; }
   }
 
   // rozsah obdélníku: kam od data vedou obě vodorovné čáry (krátké mezery – odlesk, nečistota – nevadí)
@@ -341,6 +390,8 @@ export function revisionCells(canvas, box, debug = false) {
   for (let i = 1; i < xs.length; i++) if (xs[i] - xs[i - 1] >= 0.6 * th) spans.push([xs[i - 1], xs[i]]);
   const dateX = (bx0 + bx1) / 2;
   const dateCell = spans.findIndex(([x0, x1]) => dateX >= x0 && dateX <= x1);
+  const st = spans.length === 1 && dateCell === 0 ? stackedAbove(spans[0]) : null;
+  if (st) return { cells: [], dateCell: 0, stacked: true, ...st, ...(debug ? { top, bot, vlines, left, right, th, cy, spans } : {}) };
   if (spans.length < 2 || dateCell < 0) return debug ? { fail: true, top, bot, vlines, left, right, th, cy } : null;
 
   const ins = Math.max(2, 0.12 * th);   // vnitřek bez čar

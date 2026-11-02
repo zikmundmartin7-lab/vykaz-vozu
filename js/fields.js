@@ -31,6 +31,7 @@ export const HAND_T = { key: 'hand_t', title: 'Síla zajišťovací brzdy', type
  * force = zajišťovací síla (jeden údaj, nebo Min / Max a n/N), revision = revize (roky, datum, prodloužení).
  * wagonKey = kam se hodnota uloží k vozu (numeric = jako číslo), default = předvolená volba, bad = volba červeně,
  * derived = údaj nemá vlastní krok ani snímek: odvodí se z jiného kroku a vozmistr ho potvrdí v něm.
+ * optional = údaj na voze může chybět – krok má tlačítko „Na voze není“ (ostatní se musí vyplnit).
  */
 export const FIELDS = [
   { key: 'cislo', title: 'Číslo vozu', short: 'Číslo vozu', hint: '12místné číslo na boku vozu', type: 'number' },
@@ -40,14 +41,15 @@ export const FIELDS = [
   { key: 'tare', title: 'Hmotnost a ruční brzda', short: 'Hmotnost + RB', type: 'weight', unit: 'kg', wagonKey: 'tare_kg',
     hint: 'rámeček s vlastní hmotností (kg) a pod ní síla zajišťovací brzdy (t)' },
   // jeden údaj „20,2 kN“, nebo „Min … kN (Max … kN)“ s počtem náprav n/N (předpis čl. 562); k vozu viz forceToWagon
-  { key: 'hand_kn', title: 'Zajišťovací síla', short: 'Zaj. síla (kN)', type: 'force', unit: 'kN',
+  { key: 'hand_kn', title: 'Zajišťovací síla', short: 'Zaj. síla (kN)', type: 'force', unit: 'kN', optional: true,
     hint: 'v kN: jeden údaj (20,2 kN), nebo „Min … kN (Max … kN)“ a drobně n/N' },
   { key: 'length', title: 'Délka přes nárazníky', short: 'Délka', hint: 'v metrech, např. 15,74 m', type: 'qty', unit: 'm', wagonKey: 'length_m' },
   { key: 'speed', title: 'Nejvyšší dovolená rychlost', short: 'Rychlost', hint: 'v km/h, např. 100 nebo 120 (S / SS v tabulce zatížení)',
     type: 'qty', unit: 'km/h', wagonKey: 'max_speed' },
   { key: 'blocks', title: 'Druh brzdových špalíků', short: 'Špalíky', hint: 'K, L, LL nekovové · D kotoučová brzda · F litinové', type: 'switch',
     options: BLOCKS.map(([v, l]) => [v, l]), wagonKey: 'blocks' },
-  { key: 'rezim', title: 'Přestavovač G/P', short: 'G/P', hint: 'páka režimu brzdění', type: 'switch', options: [['G', 'G'], ['P', 'P']], default: 'P' },
+  { key: 'rezim', title: 'Přestavovač G/P', short: 'G/P', hint: 'páka režimu brzdění', type: 'switch', options: [['G', 'G'], ['P', 'P']], default: 'P',
+    optional: true },
   { key: 'naklad', title: 'Přestavovač prázdný / ložený', short: 'Prázdný/ložený', type: 'loadbrake',
     hint: 'štítek u páky: nahoře brzdicí váhy, dole přestavná hmotnost; samočinný: „MAX … t“',
     options: LOAD_POSITIONS, default: 'prazdny' },
@@ -394,41 +396,46 @@ export const formatDay = (d) => (d ? `${d.getDate()}. ${d.getMonth() + 1}. ${d.g
 
 const YEARS = /^\d{1,2}\s*[JjLlRr]?$/;
 const yearsIn = (l) => YEARS.test(l.text.trim()) && Number(l.text.match(/\d+/)[0]) >= 1 && Number(l.text.match(/\d+/)[0]) <= 12;
+const YEARS_REV = /^(\d{1,2})\s*REV/i;   // roky slité se slovem REV v horní buňce obdélníku pod sebou („4 REV“)
 
 /**
- * Revize je obdélník rozdělený na buňky: v 1. buňce roky platnosti, v poslední datum, mezi nimi dílna.
- * Když jsou čáry obdélníku v obraze vidět (canvas, revisionCells z frame.js), roky jsou jen číslo 1–12 v 1. buňce
- * (číslo vlevo od obdélníku patří k jinému nápisu) a když ho detektor přehlédne, dočte se celá 1. buňka.
- * Bez čar: nejlevější samostatné číslo 1–12 v řádku s datem, místo 1. buňky se odhadne podle výšky písma.
- * Datum = text dd.mm.rr, „+N M“ za ním. yearsBox = kde dočíst roky (readRevisionYears), cells = počet buněk.
+ * Revize je obdélník rozdělený na buňky: v 1. buňce roky platnosti, v poslední datum, mezi nimi dílna – vedle sebe,
+ * nebo pod sebou („4 REV“ / dílna / datum). Bere se jen datum v takovém obdélníku (čáry hledá v obraze revisionCells
+ * z frame.js): vedle sebe musí být vlevo od data aspoň jedna buňka, pod sebou nad datem další buňka. Jiná data na voze
+ * (lhůty v tabulce, data na štítcích) se neberou; bez canvasu ani bez viditelných čar se revize nenajde.
+ * Roky = číslo 1–12 v 1. buňce (pod sebou v buňkách nad datem, i „4 REV“); když ho detektor přehlédne, dočte se
+ * celá 1. buňka. Datum = text dd.mm.rr, „+N M“ za ním. yearsBox = kde dočíst roky (readRevisionYears),
+ * cells = počet buněk vedle sebe, stacked = obdélník pod sebou.
  */
 export function extractRevision(lines, canvas = null) {
-  const dates = lines.map((l, i) => [l, i]).filter(([l]) => DATE.test(zeros(l.text)));
-  if (!dates.length) return null;
-  // přednost má datum v řádku se slovem REV, jinak to, vlevo od kterého je ještě nějaký rámeček
-  const pick = dates.find(([l]) => lines.some((x) => x.row === l.row && REV.test(x.text)))
-    ?? dates.find(([l]) => lines.some((x) => x.row === l.row && x.x < l.x)) ?? dates[0];
-  const [dl, di] = pick;
+  if (!canvas) return null;
+  const boxed = lines.map((l, i) => [l, i]).filter(([l]) => DATE.test(zeros(l.text)))
+    .map(([l, i]) => [l, i, revisionCells(canvas, l)])
+    .filter(([, , g]) => g && (g.stacked || g.dateCell >= 1));   // datum v 1. buňce = obdélník nepatří k revizi
+  if (!boxed.length) return null;
+  // přednost má datum v řádku se slovem REV, pak datum v poslední buňce
+  const pick = boxed.find(([l]) => lines.some((x) => x.row === l.row && REV.test(x.text)))
+    ?? boxed.find(([, , g]) => g.dateCell === g.cells.length - 1) ?? boxed[0];
+  const [dl, di, cells] = pick;
   const date = zeros(dl.text).match(DATE)[0].replace(/\s/g, '');
-  const row = lines.map((l, i) => [l, i]).filter(([l]) => l.row === dl.row).sort((a, b) => a[0].x - b[0].x);
-  const grid = canvas ? revisionCells(canvas, dl) : null;
-  const cells = grid && grid.dateCell >= 1 ? grid : null;   // datum v 1. buňce = obdélník nejspíš nepatří k revizi
-  const yearsHit = cells
-    ? lines.map((l, i) => [l, i]).find(([l]) => cells.cellOf(l) === 0 && yearsIn(l))
-    : row.filter(([l]) => l.x + l.w / 2 < dl.x).find(([l]) => yearsIn(l));
+  const above = cells.stacked ? lines.map((l, i) => [l, i]).filter(([l]) => cells.above(l)).sort((p, q) => p[0].x - q[0].x) : [];
+  const yearsHit = cells.stacked
+    ? above.find(([l]) => yearsIn(l) || yearsIn({ text: l.text.match(YEARS_REV)?.[1] ?? '' }))
+    : lines.map((l, i) => [l, i]).find(([l]) => cells.cellOf(l) === 0 && yearsIn(l));
   // „+3 M“ bývá hned za datem, někdy jako samostatné rámečky „+3“ a „M“
   const right = lines.map((l, i) => [l, i]).filter(([l]) => l.x > dl.x + dl.w * 0.5
     && Math.abs(l.y + l.h / 2 - (dl.y + dl.h / 2)) < dl.h * 1.2);
   const tail = right.map(([l]) => l.text).join(' ');
   const extHit = tail.match(EXT) ?? dl.text.match(EXT);
   const rev = { years: yearsHit ? Number(yearsHit[0].text.match(/\d+/)[0]) : null, date, ext: extHit ? Number(extHit[1]) : 0 };
-  // kde by měl být 1. rámeček, když v něm síť číslici nenašla (samotnou číslici v rámečku detektor přehlíží)
-  // nejlevější „opravdový“ rámeček (drobné úlomky, které detektor najde u okraje číslice, se nepočítají)
-  const first = (row.find(([l]) => l.h >= dl.h * 0.6 && l.x < dl.x) ?? [dl])[0];
+  // kde dočíst roky, když je síť nepřečetla (samotnou číslici v rámečku detektor přehlíží): 1. buňka;
+  // pod sebou místo od levého okraje obdélníku před „REV“ (buňka s roky bývá zhruba čtvercová)
+  const rev1 = above.find(([l]) => REV.test(l.text) && l.x > cells.frameLeft)?.[0];
   const yearsBox = yearsHit ? null
-    : cells ? cells.cells[0] : { x: Math.max(0, first.x - first.h * 1.7), y: first.y, w: Math.min(first.x, first.h * 1.6), h: first.h };
+    : cells.stacked ? rev1 && { x: cells.frameLeft + rev1.h * 0.15, y: rev1.y, w: Math.min(rev1.x - cells.frameLeft - rev1.h * 0.3, rev1.h * 1.1), h: rev1.h }
+      : cells.cells[0];
   return {
-    value: formatRevision(rev), rev, yearsBox, cells: cells?.cells.length ?? 0,
+    value: formatRevision(rev), rev, yearsBox, cells: cells.cells.length, stacked: Boolean(cells.stacked),
     lines: [yearsHit?.[1], di, ...(extHit ? right.filter(([l]) => /\+|M/i.test(l.text)).map(([, i]) => i) : [])].filter((i) => i != null),
   };
 }
@@ -437,7 +444,8 @@ export function extractRevision(lines, canvas = null) {
 export async function readRevisionYears(found, src, readLine) {
   if (!found?.yearsBox || found.yearsBox.w < 8) return found;
   const { text } = await readLine(src, found.yearsBox).catch(() => ({ text: '' }));
-  const n = Number(text.trim().match(/^\D{0,2}(\d{1,2})\D{0,2}$/)?.[1]);
+  // kolem číslice nanejvýš zbytky čar („|6“, „6)“), ne písmena – „AM9“ je kód dílny, ne 9 let
+  const n = Number(text.trim().match(/^[^\p{L}\d]{0,2}(\d{1,2})\s*[JjLlRr]?[^\p{L}\d]{0,2}$/u)?.[1]);
   if (!(n >= 1 && n <= 12)) return found;
   const rev = { ...found.rev, years: n };
   return { ...found, rev, value: formatRevision(rev) };
