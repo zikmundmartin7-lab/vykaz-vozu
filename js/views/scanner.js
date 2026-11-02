@@ -158,12 +158,18 @@ export function Scanner({ onDone, onClose, position }) {
     try {
       const bmp = await createImageBitmap(file);
       const lines = await readText(bmp, { maxSide: 1600 });
-      const cands = numberCandidates(lines);
+      const cands = numberCandidates(lines).filter((x) => x.valid);
       const blob = await toJpeg(bmp);
-      if (cands[0]?.valid) setFound({ number: cands[0].number, blob, shot: shot(bmp, lines, cands[0].lines) });
+      // Samo se přijme jen „jisté“ číslo jako u kamery. Jediné číslo s platnou kontrolní číslicí bývá náhoda
+      // (složené z údajů tabulek: 429.0, 1500 kg, 11.19 m …), proto se jen nabídne.
+      const sure = cands.find((x) => x.sure);
+      if (sure) setFound({ number: sure.number, blob, shot: shot(bmp, lines, sure.lines) });
       else {
-        offer(cands.filter((c) => c.valid).slice(0, 3).map((c) => ({ number: c.number, blob: null, shot: shot(bmp, lines, c.lines) })));
-        setError('Číslo se z fotky nepodařilo spolehlivě přečíst. Vyfoťte ho zblízka, nebo ho zadejte ručně.');
+        // fotka k nabídnutému číslu se uloží jako dřív u jediného čísla (číslo potvrdí ťuknutí)
+        offer(cands.slice(0, 3).map((x) => ({ number: x.number, blob, shot: shot(bmp, lines, x.lines) })));
+        setError(cands.length > 1 ? 'Na fotce je víc možných čísel – ťukněte na správné.'
+          : cands.length ? 'Číslo se nepodařilo přečíst jistě – když souhlasí, ťukněte na něj.'
+            : 'Číslo se z fotky nepodařilo přečíst. Vyfoťte ho zblízka, nebo ho zadejte ručně.');
       }
     } catch (e) {
       setError(`Fotku se nepodařilo přečíst: ${e.message}`);

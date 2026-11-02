@@ -40,8 +40,13 @@ const LOOKALIKE = { O: '0', o: '0', Q: '0', D: '0', I: '1', l: '1', i: '1', '|':
 // tečka jen místo pomlčky před kontrolní číslicí (za trojčíslím) – proto se maže jen tečka za 1–2 číslicemi.
 const DECIMAL = /\b\d+,\d+\b|\b\d{1,2}\.\d+\b/g;
 
-// Kód státu bývá nalepený na značku držitele („80D-DB“, „54CZ-ČDC“) – oddělí se, jinak by se D četlo jako 0.
-const KEEPER = /(\d)(?=\p{Lu}{1,3}-\p{Lu}{2})/gu;
+// Kód státu bývá nalepený na značku držitele („80D-DB“, „54CZ-ČDC“, „80D-“ se značkou v dalším rámečku) – oddělí se,
+// jinak by se D četlo jako 0.
+const KEEPER = /(\d)(?=\p{Lu}{1,3}-(?:\p{Lu}{2}|\s|$))/gu;
+// Dvojčíslí nalepené na RIV/TEN/PPW („31RIV“) – oddělí se, jinak slovo s převahou písmen vypadne celé.
+const MARK = /(\d)(?=(?:RIV|TEN|PPW)\b)/g;
+// Mezera mezi dvojčíslími přečtená jako tečka („31.54 3939 735-9“) – před osmi číslicemi to není desetinné číslo.
+const PAIR_DOT = /\b(\d{2})\.(\d{2})(?=\s?\d{4}\s?\d{3})/g;
 
 // Řádky s telefonem, e-mailem nebo adresou držitele („D-55252 Mainz-Kastel“, „+496134/94844-0“) – jejich číslice
 // složily na jednom voze falešné číslo s platnou kontrolní číslicí.
@@ -51,7 +56,7 @@ function digitTokens(lines) {
   const tokens = [];
   for (const [li, l] of lines.entries()) {
     if (CONTACT.test(l.text)) continue;
-    for (const word of l.text.replace(DECIMAL, ' ').replace(KEEPER, '$1 ').split(/[^0-9A-Za-z|!]+/)) {
+    for (const word of l.text.replace(PAIR_DOT, '$1 $2').replace(DECIMAL, ' ').replace(KEEPER, '$1 ').replace(MARK, '$1 ').split(/[^0-9A-Za-z|!]+/)) {
       const digits = word.replace(/\D/g, '').length;
       if (!digits || digits / word.length < 0.6) continue;
       const d = [...word].map((c) => (/\d/.test(c) ? c : LOOKALIKE[c] ?? '')).join('');
