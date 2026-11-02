@@ -143,6 +143,20 @@ const REVISIONS = [
     text(g, 'ČD 22', 520, 467, 50, '#f2f2f2');
     text(g, '13.03.24', 740, 467, 50, '#f2f2f2');
   } },
+  // bez čar jen datum přímo u slova REV
+  { name: 'revize: bez čar, datum za REV v řádku', want: '6|16.08.21|0', draw(g) {
+    text(g, '6 REV UL', 380, 467, 50, '#f2f2f2');
+    text(g, '16.08.21', 640, 467, 50, '#f2f2f2');
+  } },
+  { name: 'revize: bez čar, datum pod „4 REV“', want: '4|14.04.24|0', draw(g) {
+    text(g, '4 REV', 560, 340, 50, '#f2f2f2');
+    text(g, '504', 560, 420, 50, '#f2f2f2');
+    text(g, '14.04.24', 560, 500, 50, '#f2f2f2');
+  } },
+  { name: 'revize: bez čar, datum nad REV – nebere se', want: null, draw(g) {
+    text(g, '05.06.25', 560, 340, 50, '#f2f2f2');
+    text(g, 'REV', 560, 440, 50, '#f2f2f2');
+  } },
   { name: 'revize: cizí datum nad obdélníkem', want: '6|13.03.24|0', cells: 3, draw(g) {
     text(g, '05.06.25', 420, 300, 50, '#f2f2f2');
     panel(g, 380, 420, 90, [{ w: 90, text: '6' }, { w: 260, text: 'ČD 22' }, { w: 330, text: '13.03.24' }], '#f2f2f2');

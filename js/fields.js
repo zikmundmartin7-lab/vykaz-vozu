@@ -136,6 +136,36 @@ function betweenBuffers(q, lines, canvas) {
   return b.left && b.right;
 }
 
+// Řádek tabulky zatížení: „S“ = do 100 km/h, „SS“ = do 120 km/h, za ním hodnoty v t („37,0“, „00,0“).
+const LOAD_ROW = /^(SS|S)(?![A-Za-zÀ-ž])\s*(.*)$/;
+const LOAD_VALUE = /\d{1,3}[.,]\d/g;
+
+/**
+ * Rychlost z tabulky zatížení (nápis „km/h“ na vozech skoro nebývá). Řádek platí, jen když je v něm aspoň jedna
+ * nenulová hodnota (s desetinnou částí, v textu řádku nebo v rámečcích vpravo ve stejné výšce) – samotné písmeno S
+ * bývá i jinde na voze, řádek s nulami neplatí. Platný SS → 120, jinak platný S → 100. Vůz se 120 má i řádek S
+ * (SS je pod ním): když je pod řádkem S málo místa do kraje snímku, SS mohl být mimo záběr → partial (mimo krok
+ * rychlosti se nebere). table: hodnota je z tabulky.
+ */
+function loadTableSpeed(lines, canvas) {
+  const valid = {};
+  for (const [i, l] of lines.entries()) {
+    const m = l.text.trim().match(LOAD_ROW);
+    if (!m) continue;
+    const cy = l.y + l.h / 2;
+    const right = lines.map((o, j) => [o, j]).filter(([o]) => o !== l && Math.abs(o.y + o.h / 2 - cy) < l.h * 0.6
+      && o.x > l.x && o.x - (l.x + l.w) < l.h * 15);
+    const values = [m[2], ...right.map(([o]) => o.text)].flatMap((t) => zeros(t).match(LOAD_VALUE) ?? []);
+    if (!values.some((v) => Number(v.replace(',', '.')) > 0)) continue;
+    valid[m[1]] ??= { l, lines: [i, ...right.map(([, j]) => j)] };
+  }
+  if (valid.SS) return { value: '120', lines: valid.SS.lines, score: 1, table: true };
+  if (!valid.S) return null;
+  const { l } = valid.S;
+  const partial = Boolean(canvas) && canvas.height - (l.y + l.h) < l.h * 1.5;
+  return { value: '100', lines: valid.S.lines, score: 1, table: true, partial };
+}
+
 /**
  * Nejlepší odhad hodnoty údaje z přečtených řádků; canvas = snímek, ze kterého jsou (u délky symboly nárazníků).
  * Vrací { value (text k potvrzení), lines (indexy řádků, odkud je), buffers (délka mezi nárazníky) } nebo null.
@@ -159,13 +189,7 @@ export function extractField(field, lines, canvas = null) {
         if (score > 0 && (!best || score > best.score)) best = { value: String(inUnit(q, field.unit)), lines: q.li, score, buffers };
       }
     }
-    // rychlost bez „km/h“: řádek tabulky zatížení SS = 120 km/h, S = 100 km/h
-    if (!best && field.key === 'speed') {
-      const ss = lines.findIndex((l) => /(^|\s)SS(\s|$)/.test(l.text));
-      const s1 = lines.findIndex((l) => /(^|\s)S(\s|$)/.test(l.text));
-      if (ss >= 0) best = { value: '120', lines: [ss], score: 1 };
-      else if (s1 >= 0) best = { value: '100', lines: [s1], score: 1 };
-    }
+    if (!best && field.key === 'speed') best = loadTableSpeed(lines, canvas);
     return best;
   }
   // označení špalíků bývá samostatné písmeno u brzdy (LL, K, L)
@@ -397,22 +421,58 @@ export const formatDay = (d) => (d ? `${d.getDate()}. ${d.getMonth() + 1}. ${d.g
 const YEARS = /^\d{1,2}\s*[JjLlRr]?$/;
 const yearsIn = (l) => YEARS.test(l.text.trim()) && Number(l.text.match(/\d+/)[0]) >= 1 && Number(l.text.match(/\d+/)[0]) <= 12;
 const YEARS_REV = /^(\d{1,2})\s*REV/i;   // roky slité se slovem REV v horní buňce obdélníku pod sebou („4 REV“)
+// slovo REV i slité s roky nebo dílnou („6REV“, „REVUL“), ne uvnitř jiného slova
+const REV_WORD = /(^|[^A-Za-zÀ-ž])R[EÉ]V/i;
+const YEARS_AT_REV = /(?:^|\D)(\d{1,2})\s*R[EÉ]V/i;
+
+/**
+ * Revize bez nalezených čar obdélníku (rozmazaná, šikmá, useknutá): bere se jen datum přímo u slova REV – za ním
+ * ve stejném řádku („6 REV UL 16.08.21“, i REV jako samostatný rámeček vlevo), nebo pod ním (obdélník pod sebou
+ * „4 REV“ / dílna / datum). Jiná data na voze ne. Roky = číslo před REV (nebo samostatné číslo těsně vlevo od REV).
+ */
+function revisionAtWord(lines) {
+  const items = lines.map((l, i) => [l, i]);
+  for (const [dl, di] of items) {
+    const t = zeros(dl.text);
+    const m = t.match(DATE);
+    if (!m) continue;
+    const rev = t.slice(0, m.index).search(REV_WORD) >= 0 ? [dl, di]
+      : items.find(([x]) => x !== dl && x.row === dl.row && REV_WORD.test(x.text)
+        && x.x + x.w <= dl.x + dl.h * 0.5 && dl.x - (x.x + x.w) < dl.h * 8)
+      ?? items.find(([x]) => x !== dl && REV_WORD.test(x.text) && x.y + x.h <= dl.y + dl.h * 0.3
+        && dl.y - (x.y + x.h) < dl.h * 3 && x.x < dl.x + dl.w && x.x + x.w > dl.x);
+    if (!rev) continue;
+    const [rl, ri] = rev;
+    const own = (rl === dl ? t.slice(0, m.index) : rl.text).match(YEARS_AT_REV);
+    const left = own ? null : items.find(([x]) => x !== rl && x.row === rl.row && yearsIn(x)
+      && x.x < rl.x && rl.x - (x.x + x.w) < rl.h * 3);
+    const years = own ? Number(own[1]) : left ? Number(left[0].text.match(/\d+/)[0]) : null;
+    const right = items.filter(([l]) => l.x > dl.x + dl.w * 0.5 && Math.abs(l.y + l.h / 2 - (dl.y + dl.h / 2)) < dl.h * 1.2);
+    const extHit = t.slice(m.index).match(EXT) ?? right.map(([l]) => l.text).join(' ').match(EXT);
+    const r = { years: years >= 1 && years <= 12 ? years : null, date: m[0].replace(/\s/g, ''), ext: extHit ? Number(extHit[1]) : 0 };
+    return {
+      value: formatRevision(r), rev: r, yearsBox: null, cells: 0, stacked: false, byWord: true,
+      lines: [...new Set([left?.[1], ri, di].filter((i) => i != null))],
+    };
+  }
+  return null;
+}
 
 /**
  * Revize je obdélník rozdělený na buňky: v 1. buňce roky platnosti, v poslední datum, mezi nimi dílna – vedle sebe,
- * nebo pod sebou („4 REV“ / dílna / datum). Bere se jen datum v takovém obdélníku (čáry hledá v obraze revisionCells
- * z frame.js): vedle sebe musí být vlevo od data aspoň jedna buňka, pod sebou nad datem další buňka. Jiná data na voze
- * (lhůty v tabulce, data na štítcích) se neberou; bez canvasu ani bez viditelných čar se revize nenajde.
+ * nebo pod sebou („4 REV“ / dílna / datum). Bere se datum v takovém obdélníku (čáry hledá v obraze revisionCells
+ * z frame.js): vedle sebe musí být vlevo od data aspoň jedna buňka, pod sebou nad datem další buňka. Když čáry
+ * vidět nejsou, jen datum přímo u slova REV (revisionAtWord). Jiná data na voze (lhůty v tabulce, data na štítcích)
+ * se neberou.
  * Roky = číslo 1–12 v 1. buňce (pod sebou v buňkách nad datem, i „4 REV“); když ho detektor přehlédne, dočte se
  * celá 1. buňka. Datum = text dd.mm.rr, „+N M“ za ním. yearsBox = kde dočíst roky (readRevisionYears),
  * cells = počet buněk vedle sebe, stacked = obdélník pod sebou.
  */
 export function extractRevision(lines, canvas = null) {
-  if (!canvas) return null;
-  const boxed = lines.map((l, i) => [l, i]).filter(([l]) => DATE.test(zeros(l.text)))
+  const boxed = !canvas ? [] : lines.map((l, i) => [l, i]).filter(([l]) => DATE.test(zeros(l.text)))
     .map(([l, i]) => [l, i, revisionCells(canvas, l)])
     .filter(([, , g]) => g && (g.stacked || g.dateCell >= 1));   // datum v 1. buňce = obdélník nepatří k revizi
-  if (!boxed.length) return null;
+  if (!boxed.length) return revisionAtWord(lines);
   // přednost má datum v řádku se slovem REV, pak datum v poslední buňce
   const pick = boxed.find(([l]) => lines.some((x) => x.row === l.row && REV.test(x.text)))
     ?? boxed.find(([, , g]) => g.dateCell === g.cells.length - 1) ?? boxed[0];

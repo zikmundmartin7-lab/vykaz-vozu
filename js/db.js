@@ -47,17 +47,24 @@ export const db = {
   saveWagon: (w) => put('wagons', w),
 
   /**
-   * sample: { id, kind, label, blob, wagon, created_at, predicted?, exported_at?, deleted_at? }
+   * sample: { id, kind, label, blob, wagon, created_at, predicted?, exported_at?, exported_once?, removed?, deleted_at? }
    * Smazání = přesun do koše (deleted_at); trvale se fotka smaže až vysypáním koše.
+   * fromTraining (koš u jedné fotky v detailu): fotka, která už je v Colabu (exported_once), dostane removed
+   * a příští export ji nahlásí jako smazanou. Hromadné mazání vyexportovaných jen uvolňuje místo v telefonu.
    */
   addSample: (s) => put('samples', s),
   sample: (id) => get('samples', id),
   samples: () => all('samples'),
   updateSample: (s) => put('samples', s),
-  trashSample: async (s) => put('samples', { ...s, deleted_at: new Date().toISOString() }),
+  trashSample: async (s, fromTraining = false) => {
+    const inColab = s.exported_once || Boolean(s.exported_at);
+    return put('samples', { ...s, deleted_at: new Date().toISOString(),
+      ...(fromTraining && inColab ? { removed: true, exported_at: null, exported_once: true } : {}) });
+  },
+  // fotka vyřazená z Colabu se po obnovení musí vyexportovat znovu
   restoreSample: async (s) => {
-    const { deleted_at, ...rest } = s;
-    return put('samples', rest);
+    const { deleted_at, removed, ...rest } = s;
+    return put('samples', removed ? { ...rest, exported_at: null } : rest);
   },
   purgeSample: (id) => del('samples', id),
 };

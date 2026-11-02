@@ -67,7 +67,7 @@ function App() {
     await db.saveReport(r);
   };
 
-  if (path[0] === 'data') return html`<${DataView} />`;
+  if (path[0] === 'data') return html`<${DataView} wagon=${path[1] === 'vuz' ? path[2] ?? '-' : null} />`;
   if (path[0] === 'trenink') return html`<${Trainer} onClose=${() => go('#/data', true)} />`;
   if (!reportId) return html`<${HomeView} ocr=${ocr} />`;
   if (report === false) { go('#/', true); return null; }

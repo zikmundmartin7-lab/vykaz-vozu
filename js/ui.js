@@ -21,6 +21,7 @@ const PATHS = {
   swap: 'M7 4v16M7 20l-3-3M7 20l3-3M17 20V4M17 4l-3 3M17 4l3 3',
   text: 'M4 6h16M4 12h10M4 18h7',
   brain: 'M12 4a3 3 0 0 0-3 3 3 3 0 0 0-3 3 3 3 0 0 0 1 5 3 3 0 0 0 5 2 3 3 0 0 0 5-2 3 3 0 0 0 1-5 3 3 0 0 0-3-3 3 3 0 0 0-3-3zM12 4v16',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
 };
 
 export function Icon({ name, size = 22 }) {
@@ -40,6 +41,44 @@ export function Topbar({ title, back, children }) {
 export function WagonNumber({ number }) {
   const f = formatNumber(number);
   return html`<span class="number">${f.slice(0, -5)}<b>${f.slice(-5)}</b></span>`;
+}
+
+// ───── Hledání vozu podle posledního čtyřčíslí (jako v Závadách vozů) ─────
+// Píše se jen 4 číslice, pomlčka před kontrolní číslicí je pevně předvyplněná: [0][1][7]-[4].
+// Skutečné pole je průhledné přes políčka, takže na telefonu funguje běžná číselná klávesnice.
+
+/** Do 4 číslic se hledá podle posledního čtyřčíslí (XXX-X), při delším zadání kdekoli v čísle. */
+export const matchesLastFour = (number, q) => !q || (q.length <= 4 ? digitsOnly(number).slice(-4).startsWith(q) : digitsOnly(number).includes(q));
+
+export function LastFourSearch({ value, onChange }) {
+  const [focused, setFocused] = useState(false);
+  const inputRef = useRef();
+  const q = value ?? '';
+
+  function onInput(e) {
+    const d = digitsOnly(e.currentTarget.value);
+    // vložené celé číslo vozu → poslední čtyřčíslí; pátá napsaná číslice se nebere
+    const next = d.length > 5 ? d.slice(-4) : d.slice(0, 4);
+    e.currentTarget.value = next;
+    onChange(next);
+  }
+  function clear(e) {
+    e.preventDefault();
+    onChange('');
+    inputRef.current?.focus();
+  }
+
+  const active = focused && q.length < 4 ? q.length : -1;
+  const box = (i) => html`<span class=${`code-box ${i === active ? 'active' : ''}`}>${q[i] ?? ''}</span>`;
+  return html`<label class="search-box code-search">
+    <${Icon} name="search" />
+    <span class="code" aria-hidden="true">${box(0)}${box(1)}${box(2)}<span class="code-dash">-</span>${box(3)}</span>
+    <span class="code-hint">${q ? '' : 'poslední 4 číslice vozu'}</span>
+    <input ref=${inputRef} class="code-input" type="text" inputmode="numeric" pattern="[0-9]*"
+      autocomplete="off" enterkeyhint="search" aria-label="Hledat vůz podle posledních 4 číslic"
+      value=${q} onInput=${onInput} onFocus=${() => setFocused(true)} onBlur=${() => setFocused(false)} />
+    ${q && html`<button class="iconbtn clear" onClick=${clear} aria-label="Vymazat"><${Icon} name="close" size=${18} /></button>`}
+  </label>`;
 }
 
 /** Přepínač s velkými tlačítky. options: [[hodnota, popisek]]; bad = hodnoty zvýrazněné červeně. */

@@ -262,8 +262,9 @@ export function Trainer({ onClose }) {
         const { key: k, frozen: fz } = live.current;
         if (fz || !k || video.readyState < 2) { await sleep(150); continue; }
         const c = applyGain(grabFrame(video, video.videoWidth, video.videoHeight, READ_SIDE), live.current.gain);
-        // u přestavovačů se text nečte (nic v něm nehledáme), jen se snímek předá síti
-        const needsText = FIELD[k].type !== 'switch' || FIELD[k].key === 'blocks';
+        // u přestavovačů se text nečte (nic v něm nehledáme), jen se snímek předá síti – dokud ale není potvrzené
+        // číslo vozu, čte se i tam, aby se číslo zachytilo v kterémkoli kroku
+        const needsText = FIELD[k].type !== 'switch' || FIELD[k].key === 'blocks' || live.current.values.cislo === undefined;
         const lines = needsText ? await readText(c).catch(() => []) : [];
         if (stopped || live.current.frozen || live.current.key !== k) continue;
         const fr = { canvas: c, lines, w: c.width, h: c.height };
@@ -396,8 +397,9 @@ export function Trainer({ onClose }) {
       } else {
         const hit = extractField(f, fr.lines, fr.canvas);
         // mimo svůj krok jen jisté: číslo s kontrolní číslicí a známým státem, délka mezi symboly nárazníků
-        // (jiná „m“ na voze, např. ložná délka 10,8 m, se jinak nabídnou, když délka přes nárazníky v záběru není)
-        const strict = f.type === 'number' ? hit?.sure : key === 'length' ? hit?.buffers : true;
+        // (jiná „m“ na voze, např. ložná délka 10,8 m, se jinak nabídnou, když délka přes nárazníky v záběru není),
+        // rychlost z řádku tabulky s nenulovou hodnotou, 100 jen když by byl vidět i řádek SS pod ním
+        const strict = f.type === 'number' ? hit?.sure : key === 'length' ? hit?.buffers : key === 'speed' ? !hit?.partial : true;
         value = hit && strict ? hit.value : null;
       }
       const box = (catchVote.current[key] ??= votes());
@@ -837,10 +839,11 @@ export function Trainer({ onClose }) {
           ? st.expired ? html`<b>⚠ Revize je prošlá – platila do ${formatDay(st.until)}.</b>`
             : html`Platí do <b>${formatDay(st.until)}</b>${st.soon ? ' – brzy vyprší' : ''}.`
           : rev.date && !r.years ? 'Doplňte počet let z prvního rámečku.'
-            : 'Namiřte na obdélník revize (roky · dílna · datum) – datum mimo obdélník s buňkami se nebere.'}
+            : 'Namiřte na obdélník revize (roky · dílna · datum) – bere se jen datum v obdélníku s buňkami nebo přímo u REV.'}
       </div>
       <div class="hint">${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>${cand.stable ? '' : ' (ověřuji…)'}${
-          cand.stacked ? ' · obdélník pod sebou' : cand.cells ? ` · obdélník: ${plural(cand.cells, 'buňka', 'buňky', 'buněk')}` : ''}` : ''}
+          cand.stacked ? ' · obdélník pod sebou' : cand.cells ? ` · obdélník: ${plural(cand.cells, 'buňka', 'buňky', 'buněk')}`
+            : cand.byWord ? ' · u slova REV' : ''}` : ''}
         ${knownValue && html` · v paměti: ${knownValue}`}</div>`;
   }
 
