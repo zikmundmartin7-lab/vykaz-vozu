@@ -3,7 +3,7 @@
 // poslouží k natrénování sítě, která pozná, který nápis je který údaj.
 
 import { numberCandidates, digitsOnly, formatNumber, isCompleteNumber, BLOCKS, LOAD_POSITIONS } from './model.js';
-import { buffersAround, hull } from './frame.js';
+import { buffersAround, hull, revisionCells } from './frame.js';
 
 /**
  * Barva rámečku hodnoty v tunách pod vlastní hmotností (ukládá se barva, ne význam).
@@ -27,7 +27,8 @@ export const HAND_T = { key: 'hand_t', title: 'Síla zajišťovací brzdy', type
  * Kroky tréninku ve výchozím pořadí obchůzky (vozmistr si ho může přetažením změnit, viz trainer.js).
  * type: number = číslo vozu, qty = číslo s jednotkou, switch = volba tlačítkem (přestavovače, nápravy, špalíky),
  * text = volný text, weight = hmotnost + ruční brzda z jednoho rámečku,
- * loadbrake = poloha přestavovače prázdný/ložený tlačítkem + brzdicí váhy a přestavná hmotnost z nápisu.
+ * loadbrake = poloha přestavovače prázdný/ložený tlačítkem + brzdicí váhy a přestavná hmotnost z nápisu,
+ * force = zajišťovací síla (jeden údaj, nebo Min / Max a n/N), revision = revize (roky, datum, prodloužení).
  * wagonKey = kam se hodnota uloží k vozu (numeric = jako číslo), default = předvolená volba, bad = volba červeně,
  * derived = údaj nemá vlastní krok ani snímek: odvodí se z jiného kroku a vozmistr ho potvrdí v něm.
  */
@@ -38,7 +39,9 @@ export const FIELDS = [
     options: [['2', '2'], ['3', '3'], ['4', '4'], ['6', '6'], ['8', '8']], wagonKey: 'axles', numeric: true },
   { key: 'tare', title: 'Hmotnost a ruční brzda', short: 'Hmotnost + RB', type: 'weight', unit: 'kg', wagonKey: 'tare_kg',
     hint: 'rámeček s vlastní hmotností (kg) a pod ní síla zajišťovací brzdy (t)' },
-  { key: 'hand_kn', title: 'Zajišťovací síla', short: 'Zaj. síla (kN)', hint: 'v kN, např. 20,2 kN', type: 'qty', unit: 'kN', wagonKey: 'hand_force_kn' },
+  // jeden údaj „20,2 kN“, nebo „Min … kN (Max … kN)“ s počtem náprav n/N (předpis čl. 562); k vozu viz forceToWagon
+  { key: 'hand_kn', title: 'Zajišťovací síla', short: 'Zaj. síla (kN)', type: 'force', unit: 'kN',
+    hint: 'v kN: jeden údaj (20,2 kN), nebo „Min … kN (Max … kN)“ a drobně n/N' },
   { key: 'length', title: 'Délka přes nárazníky', short: 'Délka', hint: 'v metrech, např. 15,74 m', type: 'qty', unit: 'm', wagonKey: 'length_m' },
   { key: 'speed', title: 'Nejvyšší dovolená rychlost', short: 'Rychlost', hint: 'v km/h, např. 100 nebo 120 (S / SS v tabulce zatížení)',
     type: 'qty', unit: 'km/h', wagonKey: 'max_speed' },
@@ -168,8 +171,170 @@ export function extractField(field, lines, canvas = null) {
     const li = lines.findIndex((l) => /^(LL|K|L)$/.test(l.text.trim()));
     return li < 0 ? null : { value: lines[li].text.trim(), lines: [li] };
   }
-  if (field.key === 'revize') return extractRevision(lines);
+  if (field.key === 'revize') return extractRevision(lines, canvas);
+  if (field.type === 'force') return extractHandForce(lines);
   return null;
+}
+
+// ───── Zajišťovací síla ruční brzdy (předpis čl. 562, 427) ─────
+// Starší vozy: jeden údaj „20,2 kN“ (maximální zajišťovací síla). Novější: „Min 18,0 kN“, pod ním nebo za ním
+// „( Max 36,0 kN )“ a drobně „n/N“ – n náprav, na které působí ruční brzda, z N náprav vozu; bývá i jen Min.
+// Hodnota se ukládá jako text: jeden údaj „20.2“, jinak „Min|Max|n/N“ („18|36|2/4“, jen Min „14||2/2“).
+
+// i Min jen s kN – „R min 35 m“ (nejmenší poloměr oblouku) na voze bývá taky
+const MIN_KN = /\bM[il1|]n\b\.?\s*[:=]?\s*(\d{1,3}(?:[,.]\d{1,2})?)\s*k?\s?N\b/i;
+// Max jen s kN – „MAX: 58 t“ je brzdicí váha samočinného brzdění, „MAX: 2,5 %“ sklon u ruční brzdy (TSI WAG)
+const MAX_KN = /\bMax\b\.?\s*[:=]?\s*(\d{1,3}(?:[,.]\d{1,2})?)\s*k?\s?N\b/i;
+const N_OF_N = /(?<![\d.,])(\d{1,2})\s*\/\s*(\d{1,2})(?![\d.,])/;
+// drobné lomítko síť čte jako 1 nebo l: „kN )2/4“ → „KN)214“, samotné „2/4“ → „214“
+const N_OF_N_SLASH1 = /^\)?\s*(\d)\s*[1lI|]\s*(\d{1,2})$/;
+const FORCE_RANGE = (v) => v >= 3 && v <= 200;
+
+/** Uložený text zajišťovací síly → { single } nebo { min, max, n, N } (chybějící = null). */
+export function parseForce(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  if (!s.includes('|')) return Number.isFinite(Number(s)) ? { single: Number(s) } : null;
+  const [a, b, nn] = s.split('|');
+  const [n, N] = (nn ?? '').split('/').map((x) => (x ? Number(x) : null));
+  return { min: a ? Number(a) : null, max: b ? Number(b) : null, n: n ?? null, N: N ?? null };
+}
+
+export function formatForce(f) {
+  if (!f) return '';
+  if (f.single != null) return String(f.single);
+  return `${f.min ?? ''}|${f.max ?? ''}|${f.n != null && f.N != null ? `${f.n}/${f.N}` : ''}`;
+}
+
+const kn = (v) => `${Number(v).toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} kN`;
+/** „20,2 kN“, „Min 18 kN · Max 36 kN · n/N 2/4“. */
+export function describeForce(f) {
+  if (!f) return '';
+  if (f.single != null) return kn(f.single);
+  return [f.min != null && `Min ${kn(f.min)}`, f.max != null && `Max ${kn(f.max)}`, f.n != null && f.N != null && `n/N ${f.n}/${f.N}`]
+    .filter(Boolean).join(' · ');
+}
+
+/** Zajišťovací síla z nápisu → údaje vozu (co nápis neříká, zůstane z paměti: n/N u jednoho údaje). */
+export function forceToWagon(f, old = {}) {
+  if (!f) return {};
+  if (f.single != null) return { hand_force_kn: f.single, hand_force_min_kn: null, hand_force_max_kn: null };
+  return {
+    hand_force_kn: null, hand_force_min_kn: f.min, hand_force_max_kn: f.max,
+    hand_n: f.n ?? old.hand_n ?? null, hand_N: f.N ?? old.hand_N ?? null,
+  };
+}
+
+/** Údaje vozu → zajišťovací síla jako na nápisu (null, když ji vůz nemá). */
+export function wagonForce(w) {
+  if (!w) return null;
+  if (w.hand_force_min_kn != null || w.hand_force_max_kn != null) {
+    return { min: w.hand_force_min_kn ?? null, max: w.hand_force_max_kn ?? null, n: w.hand_n ?? null, N: w.hand_N ?? null };
+  }
+  return w.hand_force_kn != null ? { single: w.hand_force_kn } : null;
+}
+
+const validNN = (n, N) => n >= 1 && N >= 2 && N <= 12 && n <= N;
+
+// Text nápisu i s navazujícími rámečky vpravo ve stejné výšce. Síť dělí nápis na víc rámečků a pořadí řádků
+// na nakloněném snímku nebo s brzdovým symbolem vedle bývá nejisté („kN | 18,0 | Min“), proto podle polohy.
+function chainRight(lines, i) {
+  const li = [i];
+  let cur = lines[i];
+  for (;;) {
+    const h = cur.th ?? cur.h;
+    const next = lines.map((l, j) => [l, j]).filter(([l, j]) => !li.includes(j)
+      && l.x > cur.x + cur.w * 0.5 && l.x - (cur.x + cur.w) < h * 1.5
+      && Math.abs(l.y + l.h / 2 - (cur.y + cur.h / 2)) < Math.max(h, l.th ?? l.h) * 0.5)
+      .sort((a, b) => a[0].x - b[0].x)[0];
+    if (!next) break;
+    li.push(next[1]);
+    cur = next[0];
+  }
+  return { text: li.map((j) => lines[j].text).join(' '), li };
+}
+
+const decimal = (s) => Number(s.replace(',', '.'));
+
+/** n/N v textu nápisu (i s lomítkem přečteným jako 1 za závorkou nebo v samostatném drobném nápisu). */
+function nOfN(text, alone) {
+  const t = zeros(text);
+  let m = t.match(N_OF_N);
+  if (!m) m = t.match(/\)\s*(\d)\s*[1lI|]\s*(\d{1,2})(?![\d.,])/) ?? (alone ? t.trim().match(N_OF_N_SLASH1) : null);
+  return m && validNN(Number(m[1]), Number(m[2])) ? { n: Number(m[1]), N: Number(m[2]) } : null;
+}
+
+/**
+ * Zajišťovací síla z přečtených řádků. Vrací { value (text jako parseForce), force, lines } nebo null.
+ * Nápis s Min: Max a n/N se hledají v jeho okolí (pod ním a vpravo); bez Min jeden údaj s kN (ne u Max).
+ */
+export function extractHandForce(lines) {
+  let min = null;
+  for (const [i, l] of lines.entries()) {
+    if (!/\bM[il1|]n\b/i.test(l.text)) continue;
+    const c = chainRight(lines, i);
+    const m = zeros(c.text).match(MIN_KN);
+    if (m && FORCE_RANGE(decimal(m[1]))) { min = { v: decimal(m[1]), li: c.li, line: l }; break; }
+  }
+  // okolí nápisu Min: Max bývá pod ním (menším písmem) nebo za ním, n/N vpravo dole
+  const near = (l) => {
+    if (!min) return true;
+    const r = min.line;
+    const h = r.th ?? r.h;
+    const cx = l.x + l.w / 2;
+    const cy = l.y + l.h / 2;
+    return cx > r.x - h * 2 && cx < r.x + r.w + h * 14 && cy > r.y - h * 0.5 && cy < r.y + r.h + h * 2.5;
+  };
+  let max = null;
+  for (const [i, l] of lines.entries()) {
+    if (!/\bMax\b/i.test(l.text) || !near(l)) continue;
+    const c = chainRight(lines, i);
+    const m = zeros(c.text).match(MAX_KN);
+    if (m && FORCE_RANGE(decimal(m[1]))) { max = { v: decimal(m[1]), li: c.li, text: c.text }; break; }
+  }
+  // Max bez přečteného slova Min: Min je číslo s kN nad Max nebo před ním
+  if (!min && max) {
+    const q = quantities(lines).find((x) => x.unit === 'kN' && !x.li.some((i) => max.li.includes(i)) && !/\bMax\b/i.test(x.text) && FORCE_RANGE(x.v));
+    if (q) min = { v: q.v, li: q.li, line: lines[q.li[0]] };
+  }
+  if (min) {
+    const used = new Set([...min.li, ...(max?.li ?? [])]);
+    let nn = nOfN(max?.text ?? '', false) ?? nOfN(chainRight(lines, min.li[0]).text, false);
+    let nnLi = nn ? (max?.li ?? min.li) : [];
+    if (!nn) {
+      for (const [i, l] of lines.entries()) {
+        if (used.has(i) || !near(l)) continue;
+        nn = nOfN(l.text, true);
+        if (nn) { nnLi = [i]; break; }
+      }
+    }
+    const force = { min: min.v, max: max?.v ?? null, n: nn?.n ?? null, N: nn?.N ?? null };
+    return { value: formatForce(force), force, lines: [...new Set([...min.li, ...(max?.li ?? []), ...nnLi])] };
+  }
+  // jeden údaj: číslo s kN mimo nápisy s Max
+  const q = quantities(lines).find((x) => x.unit === 'kN' && FORCE_RANGE(x.v) && !/\bMax\b/i.test(x.text));
+  if (!q) return null;
+  const force = { single: q.v };
+  return { value: formatForce(force), force, lines: q.li };
+}
+
+/** Ťuknutý nápis → co z něj jde do polí zajišťovací síly: { kind, a, b, nN } (jen přečtené části). */
+export function forceFromLine(lines, i) {
+  const c = chainRight(lines, i);
+  const t = zeros(c.text);
+  const out = {};
+  const mi = t.match(MIN_KN);
+  const ma = t.match(MAX_KN);
+  if (mi) Object.assign(out, { kind: 'min', a: mi[1].replace('.', ',') });
+  if (ma) Object.assign(out, { kind: 'min', b: ma[1].replace('.', ',') });
+  const nn = nOfN(t, true);
+  if (nn) out.nN = `${nn.n}/${nn.N}`;
+  if (!mi && !ma && !nn) {
+    const q = quantities(lines).find((x) => x.li.includes(i) && x.unit === 'kN');
+    const n = q ? String(q.v) : t.match(/\d+(?:[,.]\d+)?/)?.[0];
+    if (n) out.a = n.replace('.', ',');
+  }
+  return out;
 }
 
 // ───── Revize: [roky] … [datum] +M ─────
@@ -209,11 +374,17 @@ export function revisionStatus(rev) {
 
 export const formatDay = (d) => (d ? `${d.getDate()}. ${d.getMonth() + 1}. ${d.getFullYear()}` : '');
 
+const YEARS = /^\d{1,2}\s*[JjLlRr]?$/;
+const yearsIn = (l) => YEARS.test(l.text.trim()) && Number(l.text.match(/\d+/)[0]) >= 1 && Number(l.text.match(/\d+/)[0]) <= 12;
+
 /**
- * Nejlevější samostatné číslo 1–12 v řádku s datem = roky, datum = poslední rámeček, „+N M“ za ním.
- * yearsBox = místo, kde by měl být 1. rámeček, když roky nenašel (dočte je readRevisionYears).
+ * Revize je obdélník rozdělený na buňky: v 1. buňce roky platnosti, v poslední datum, mezi nimi dílna.
+ * Když jsou čáry obdélníku v obraze vidět (canvas, revisionCells z frame.js), roky jsou jen číslo 1–12 v 1. buňce
+ * (číslo vlevo od obdélníku patří k jinému nápisu) a když ho detektor přehlédne, dočte se celá 1. buňka.
+ * Bez čar: nejlevější samostatné číslo 1–12 v řádku s datem, místo 1. buňky se odhadne podle výšky písma.
+ * Datum = text dd.mm.rr, „+N M“ za ním. yearsBox = kde dočíst roky (readRevisionYears), cells = počet buněk.
  */
-export function extractRevision(lines) {
+export function extractRevision(lines, canvas = null) {
   const dates = lines.map((l, i) => [l, i]).filter(([l]) => DATE.test(zeros(l.text)));
   if (!dates.length) return null;
   // přednost má datum v řádku se slovem REV, jinak to, vlevo od kterého je ještě nějaký rámeček
@@ -222,9 +393,11 @@ export function extractRevision(lines) {
   const [dl, di] = pick;
   const date = zeros(dl.text).match(DATE)[0].replace(/\s/g, '');
   const row = lines.map((l, i) => [l, i]).filter(([l]) => l.row === dl.row).sort((a, b) => a[0].x - b[0].x);
-  const left = row.filter(([l]) => l.x + l.w / 2 < dl.x);
-  const yearsHit = left.find(([l]) => /^\d{1,2}\s*[JjLlRr]?$/.test(l.text.trim()) && Number(l.text.match(/\d+/)[0]) >= 1
-    && Number(l.text.match(/\d+/)[0]) <= 12);
+  const grid = canvas ? revisionCells(canvas, dl) : null;
+  const cells = grid && grid.dateCell >= 1 ? grid : null;   // datum v 1. buňce = obdélník nejspíš nepatří k revizi
+  const yearsHit = cells
+    ? lines.map((l, i) => [l, i]).find(([l]) => cells.cellOf(l) === 0 && yearsIn(l))
+    : row.filter(([l]) => l.x + l.w / 2 < dl.x).find(([l]) => yearsIn(l));
   // „+3 M“ bývá hned za datem, někdy jako samostatné rámečky „+3“ a „M“
   const right = lines.map((l, i) => [l, i]).filter(([l]) => l.x > dl.x + dl.w * 0.5
     && Math.abs(l.y + l.h / 2 - (dl.y + dl.h / 2)) < dl.h * 1.2);
@@ -234,9 +407,10 @@ export function extractRevision(lines) {
   // kde by měl být 1. rámeček, když v něm síť číslici nenašla (samotnou číslici v rámečku detektor přehlíží)
   // nejlevější „opravdový“ rámeček (drobné úlomky, které detektor najde u okraje číslice, se nepočítají)
   const first = (row.find(([l]) => l.h >= dl.h * 0.6 && l.x < dl.x) ?? [dl])[0];
-  const yearsBox = yearsHit ? null : { x: Math.max(0, first.x - first.h * 1.7), y: first.y, w: Math.min(first.x, first.h * 1.6), h: first.h };
+  const yearsBox = yearsHit ? null
+    : cells ? cells.cells[0] : { x: Math.max(0, first.x - first.h * 1.7), y: first.y, w: Math.min(first.x, first.h * 1.6), h: first.h };
   return {
-    value: formatRevision(rev), rev, yearsBox,
+    value: formatRevision(rev), rev, yearsBox, cells: cells?.cells.length ?? 0,
     lines: [yearsHit?.[1], di, ...(extHit ? right.filter(([l]) => /\+|M/i.test(l.text)).map(([, i]) => i) : [])].filter((i) => i != null),
   };
 }
@@ -445,6 +619,7 @@ export function displayValue(field, value) {
   if (field.type === 'number') return formatNumber(value);
   if (field.type === 'qty' || field.type === 'weight') return `${Number(value).toLocaleString('cs-CZ', { maximumFractionDigits: 2 })} ${field.unit}`;
   if (field.key === 'axles') return `${value} náprav${Number(value) <= 4 ? 'y' : ''}`;
+  if (field.type === 'force') return describeForce(parseForce(value)) || value;
   if (field.type === 'revision') {
     const r = parseRevision(value);
     const st = revisionStatus(r);
@@ -463,6 +638,15 @@ export function matchingLines(field, lines, value) {
   }
   if (field.type === 'qty' || field.type === 'weight') {
     return quantities(lines).filter((q) => Math.abs((inUnit(q, field.unit) ?? NaN) - Number(value)) < 1e-6).flatMap((q) => q.li);
+  }
+  if (field.type === 'force') {
+    const found = extractHandForce(lines);
+    if (found?.value === value) return found.lines;
+    // opravená hodnota: řádky, ve kterých je některé z potvrzených čísel
+    const f = parseForce(value) ?? {};
+    const nums = [f.single, f.min, f.max].filter((v) => v != null).map((v) => String(v));
+    return lines.map((l, i) => [zeros(l.text).replace(/,/g, '.'), i])
+      .filter(([t]) => nums.some((n) => new RegExp(`(?<![\\d.])${n.replace('.', '\\.')}(?:\\.0+)?(?![.\\d])`).test(t))).map(([, i]) => i);
   }
   return lines.map((l, i) => [l, i]).filter(([l]) => l.text.length > 2 && value.includes(l.text.trim())).map(([, i]) => i);
 }

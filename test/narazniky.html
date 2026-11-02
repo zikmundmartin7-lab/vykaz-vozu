@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="cs"><head><meta charset="utf-8"><title>Test symbolů nárazníků</title></head>
+<body><pre id="out"></pre>
+<script type="module">
+// Symboly nárazníků „⊢— 12,04 m —⊣“ (js/frame.js buffersAround) na uměle vyrobených nápisech: rovně, nakloněné,
+// se šipkami místo nárazníků. Výsledek (JSON) se dá porovnat před a po úpravě frame.js.
+import { buffersAround } from '../js/frame.js';
+
+const out = document.getElementById('out');
+let seed = 3;
+const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+
+function draw(kind, deg, ink, bg) {
+  const c = document.createElement('canvas');
+  c.width = 1400; c.height = 500;
+  const g = c.getContext('2d');
+  g.fillStyle = bg; g.fillRect(0, 0, c.width, c.height);
+  g.save();
+  g.translate(700, 250); g.rotate((deg * Math.PI) / 180); g.translate(-700, -250);
+  g.fillStyle = ink; g.strokeStyle = ink; g.lineWidth = 5;
+  g.font = 'bold 60px "DejaVu Sans"'; g.textBaseline = 'middle'; g.textAlign = 'center';
+  g.fillText('12,04 m', 700, 250);
+  const end = (x, dir) => {
+    g.beginPath(); g.moveTo(x, 250); g.lineTo(x + dir * 160, 250); g.stroke();
+    if (kind === 'buffers') { g.beginPath(); g.moveTo(x + dir * 160, 222); g.lineTo(x + dir * 160, 278); g.stroke(); }
+    else { g.beginPath(); g.moveTo(x + dir * 15, 235); g.lineTo(x, 250); g.lineTo(x + dir * 15, 265); g.stroke(); }
+  };
+  end(560, -1); end(840, 1);
+  g.restore();
+  const img = g.getImageData(0, 0, c.width, c.height);
+  for (let i = 0; i < img.data.length; i += 4) { const n = (rnd() - 0.5) * 20; img.data[i] += n; img.data[i + 1] += n; img.data[i + 2] += n; }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+
+const res = [];
+for (const kind of ['buffers', 'arrows']) {
+  for (const deg of [0, 4, -7]) {
+    for (const [ink, bg] of [['#f0f0f0', '#4a3528'], ['#111', '#c8c8c0']]) {
+      const c = draw(kind, deg, ink, bg);
+      const a = (deg * Math.PI) / 180;
+      // obdélník řádku jako z ocr.js: obálka natočeného řádku 12,04 m
+      const len = 260, thick = 80;
+      const w = len * Math.abs(Math.cos(a)) + thick * Math.abs(Math.sin(a));
+      const h = len * Math.abs(Math.sin(a)) + thick * Math.abs(Math.cos(a));
+      const box = { x: 700 - w / 2, y: 250 - h / 2, w, h, ...(deg ? { angle: a, th: thick } : {}) };
+      const r = buffersAround(c, box, true);
+      res.push({ kind, deg, ink, left: r.left, right: r.right, th: r.th, cy: r.cy && Math.round(r.cy * 10) / 10, segs: r.segs });
+    }
+  }
+}
+out.textContent = JSON.stringify(res);
+window.done = true;
+</script></body></html>
