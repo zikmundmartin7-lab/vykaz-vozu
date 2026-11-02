@@ -11,7 +11,7 @@ import { db } from '../db.js';
 import { seriesInfo } from '../series.js';
 import { readText } from '../ocr.js';
 import { brakeModels, predictSwitch } from '../brake.js';
-import { HAND_BRAKE, HAND_BRAKE_MEANING, parseRevision, formatRevision, revisionStatus, formatDay } from '../fields.js';
+import { HAND_BRAKE, HAND_BRAKE_MEANING, parseRevision, formatRevision, maskDate, revisionStatus, formatDay } from '../fields.js';
 import { Topbar, Icon, Seg, NumField, NumberInput, PhotoButton, BlobImg, toast, go } from '../ui.js';
 
 const FIELD_NO = { axles: '47.', length_m: '48.', tare_kg: '50.', hand_bw_t: '', max_speed: '57.' };
@@ -212,7 +212,8 @@ export function EntryView({ report, entryId, save }) {
         <label class="field"><span>Roky</span>
           <input class="input" inputmode="numeric" value=${r.years ?? ''} onInput=${(ev) => set('years', ev.target.value)} /></label>
         <label class="field"><span>Datum</span>
-          <input class="input" inputmode="decimal" placeholder="13.03.24" value=${r.date} onInput=${(ev) => set('date', ev.target.value)} /></label>
+          <input class="input" inputmode="decimal" placeholder="13.03.24" value=${r.date}
+            onInput=${(ev) => set('date', maskDate(ev.target.value, ev.inputType?.startsWith('delete')))} /></label>
         <label class="field"><span>+ měsíců</span>
           <input class="input" inputmode="numeric" value=${r.ext || ''} onInput=${(ev) => set('ext', ev.target.value)} /></label>
       </div>

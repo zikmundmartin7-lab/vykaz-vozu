@@ -9,7 +9,7 @@ import { loadOcr, readText, readLine } from '../ocr.js';
 import { predictSwitch } from '../brake.js';
 import {
   FIELDS, FIELD, HAND_T, HAND_BRAKE, HAND_BRAKE_MEANING, extractField, parseRevision, formatRevision,
-  parseRevDate, revisionStatus, formatDay, readRevisionYears, extractHandT, valueFromLine, normalizeValue, isValidValue, displayValue, matchingLines,
+  parseRevDate, maskDate, revisionStatus, formatDay, readRevisionYears, extractHandT, valueFromLine, normalizeValue, isValidValue, displayValue, matchingLines,
   LOAD_KEYS, extractLoadBrake, loadNumbers, formatLoad, parseForce, formatForce, describeForce, forceToWagon, wagonForce, forceFromLine,
 } from '../fields.js';
 import { db } from '../db.js';
@@ -223,6 +223,7 @@ export function Trainer({ onClose }) {
   const [flash, setFlash] = useState(null);          // právě uložený snímek: { url, text, key }
   const [caught, setCaught] = useState({});          // údaje přečtené mimo svůj krok: klíč → { value, frame, from }
   const [caughtFrom, setCaughtFrom] = useState(null); // krok, při kterém se přečetl právě zobrazený údaj
+  const flow = useRef(null);                          // krok, za kterým pokračuje pořadí po potvrzení přečtených údajů
   const [busy, setBusy] = useState(false);
   const [, setTick] = useState(0);
   const light = useCameraLight();
@@ -448,11 +449,14 @@ export function Trainer({ onClose }) {
     }
   }
 
-  // další nevyplněný krok v pořadí za tím současným (pak od začátku); vše vyplněné → souhrn
+  // Další nevyplněný krok v pořadí za tím současným (pak od začátku); vše vyplněné → souhrn.
+  // Přednost mají kroky s údajem přečteným už při jiném kroku – nabídnou se k potvrzení hned. Po nich
+  // pořadí pokračuje za krokem, který byl potvrzený před nimi (přeskočené kroky se tak neodsunou na konec).
   function nextKey(vals) {
-    const i = order.indexOf(current);
-    const rest = [...order.slice(i + 1), ...order.slice(0, i)];
-    return rest.find((k) => vals[k] === undefined) ?? null;
+    if (!caughtFrom || !flow.current) flow.current = current;
+    const i = order.indexOf(flow.current);
+    const rest = [...order.slice(i + 1), ...order.slice(0, i + 1)].filter((k) => vals[k] === undefined);
+    return rest.find((k) => caught[k]) ?? rest[0] ?? null;
   }
 
   function reorder(next) {
@@ -745,6 +749,7 @@ export function Trainer({ onClose }) {
     setKnown(null);
     setCaught({});
     catchVote.current = {};
+    flow.current = null;
     goTo(order[0], {}, {});
   }
 
@@ -775,7 +780,10 @@ export function Trainer({ onClose }) {
   function revisionPanel() {
     const r = { years: Number(rev.years) || null, date: rev.date, ext: Number(rev.ext) || 0 };
     const st = revisionStatus(r);
-    const set = (k) => (e) => { setTouched(true); setRev((x) => ({ ...x, [k]: e.target.value })); };
+    const set = (k) => (e) => {
+      setTouched(true);
+      setRev((x) => ({ ...x, [k]: k === 'date' ? maskDate(e.target.value, e.inputType?.startsWith('delete')) : e.target.value }));
+    };
     return html`<div class="grid3">
         <label class="field"><span>Roky (1. rámeček)</span>
           <input class="input bigvalue" value=${rev.years} inputmode="numeric" placeholder="?" onFocus=${freeze} onInput=${set('years')} /></label>

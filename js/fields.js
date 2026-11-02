@@ -361,6 +361,24 @@ export function parseRevDate(text) {
   return d.getMonth() === Number(m[2]) - 1 && d.getDate() === Number(m[1]) ? d : null;
 }
 
+/**
+ * Ruční psaní data „dd.mm.rr“: tečky se doplní samy (iPhone v češtině má u číselné klávesnice jen čárku).
+ * Po dvou číslicích dne a měsíce se tečka přidá hned, při mazání ne (jinak by nešla smazat). Čárka nebo
+ * tečka napsaná dřív ukončí den / měsíc s jednou číslicí („1,3,24“ → „1.3.24“).
+ */
+export function maskDate(text, deleting = false) {
+  const parts = [''];
+  for (const ch of String(text ?? '')) {
+    const last = parts.length - 1;
+    if (/\d/.test(ch)) {
+      if (last < 2 && parts[last].length === 2) parts.push(ch);
+      else if (last < 2 || parts[last].length < 4) parts[last] += ch;
+    } else if (/[.,/-]/.test(ch) && parts[last] && last < 2) parts.push('');
+  }
+  if (!deleting && parts.length < 3 && parts.at(-1).length === 2) parts.push('');
+  return parts.join('.');
+}
+
 /** Platnost revize: { until: Date | null, expired, soon } (soon = vyprší do 30 dnů). */
 export function revisionStatus(rev) {
   const r = typeof rev === 'string' ? parseRevision(rev) : rev;
