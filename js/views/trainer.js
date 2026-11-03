@@ -1,6 +1,7 @@
 // Trénink: vozmistr obchází vůz s kamerou a aplikace ho vede po údajích v pořadí obchůzky
 // (seznam kroků vpravo; ťuknutí = přejít na krok, přetažení = změnit pořadí, pamatuje se v telefonu).
-// Kamera čte text v celém záběru, kolem přečtených nápisů kreslí rámečky a navrhne hodnotu.
+// Kamera čte text v celém záběru, kolem přečtených nápisů kreslí rámečky a navrhne hodnotu. Číslo vozu se čte
+// jako ve skeneru (a v Závadách vozů) jen v rámečku a přečtené se ukáže s výřezem snímku k porovnání.
 // Vozmistr ji potvrdí, opraví, nebo ťukne na správný nápis. Každé potvrzení uloží snímek, přečtený text
 // a označený nápis jako trénovací příklad; po posledním kroku se údaje uloží k vozu.
 
@@ -13,11 +14,12 @@ import {
   LOAD_KEYS, extractLoadBrake, loadNumbers, formatLoad, parseForce, formatForce, describeForce, forceToWagon, wagonForce, forceFromLine,
 } from '../fields.js';
 import { db } from '../db.js';
-import { uid, formatNumber, isValidCheckDigit, digitsOnly, loadBrakeToWagon, plural } from '../model.js';
-import { Icon, Seg, PhotoButton, vibrate, toast } from '../ui.js';
+import { uid, formatNumber, isValidCheckDigit, digitsOnly, loadBrakeToWagon, plural, numberCandidates, indexWagons } from '../model.js';
+import { Icon, Seg, PhotoButton, WagonNumber, vibrate, toast } from '../ui.js';
 import { useCameraLight, LightButtons, BrightnessSlider, applyGain } from '../light.js';
 import { handBrakeFrame, hull } from '../frame.js';
 import { seriesInfo, axlesText } from '../series.js';
+import { DECAY, ACCEPT, MAYBE, MAX_MAYBE, guideRegion, grab, shot } from './scanner.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MAX_SIDE = 1280;    // ukládaný snímek pro trénink
@@ -232,11 +234,19 @@ export function Trainer({ onClose }) {
   const offered = useRef(new Set());                  // kroky, jejichž přečtený údaj se už sám nabídl (znovu se nenabízí)
   const [busy, setBusy] = useState(false);
   const [, setTick] = useState(0);
+  // krok čísla vozu jako skener: čte se jen rámeček, přijaté číslo se ukáže s výřezem snímku
+  const guideRef = useRef();
+  const [found, setFound] = useState(null);          // přijaté číslo { number, filled, lines, shot, frame }
+  const [maybe, setMaybe] = useState([]);            // nabídnutá čísla (jen platná kontrolní číslice), stejně
+  const offeredNums = useRef([]);
+  const numVotes = useRef(new Map());                // číslo → { sure, valid } (hlasování jako ve skeneru)
+  const knownNums = useRef(null);                    // indexWagons(paměť vozů): doplní nepřečtený začátek čísla
+  const [reading, setReading] = useState('');        // čísla, která síť právě v rámečku čte
   const light = useCameraLight();
   const vote = useRef({ main: votes(), t: votes(), color: votes() });
   const catchVote = useRef({});
   const live = useRef({});
-  live.current = { key: current, frozen, touched, plateTouched, gain: light.gain, info, values };
+  live.current = { key: current, frozen, touched, plateTouched, gain: light.gain, info, values, found };
 
   const field = current ? FIELD[current] : null;
   const closeup = field ? CLOSEUP[field.key] : null;
@@ -264,27 +274,33 @@ export function Trainer({ onClose }) {
       setCamera('live');
       await loadOcr().catch(() => {});
       while (!stopped) {
-        const { key: k, frozen: fz } = live.current;
-        if (fz || !k || video.readyState < 2) { await sleep(150); continue; }
-        const c = applyGain(grabFrame(video, video.videoWidth, video.videoHeight, READ_SIDE), live.current.gain);
+        const { key: k, frozen: fz, found: fd } = live.current;
+        if (fz || fd || !k || video.readyState < 2) { numVotes.current.clear(); await sleep(150); continue; }
+        // číslo vozu jen z rámečku (jako ve skeneru), ostatní kroky z celého záběru
+        const inGuide = FIELD[k].type === 'number';
+        if (inGuide && !guideRef.current) { await sleep(60); continue; }
+        const c = applyGain(inGuide ? grab(video, guideRegion(video, guideRef.current), document.createElement('canvas'))
+          : grabFrame(video, video.videoWidth, video.videoHeight, READ_SIDE), live.current.gain);
         // u přestavovačů se text nečte (nic v něm nehledáme), jen se snímek předá síti – dokud ale není potvrzené
         // číslo vozu, čte se i tam, aby se číslo zachytilo v kterémkoli kroku
         const needsText = FIELD[k].type !== 'switch' || FIELD[k].key === 'blocks' || live.current.values.cislo === undefined;
         const lines = needsText ? await readText(c).catch(() => []) : [];
-        if (stopped || live.current.frozen || live.current.key !== k) continue;
-        const fr = { canvas: c, lines, w: c.width, h: c.height };
+        if (stopped || live.current.frozen || live.current.found || live.current.key !== k) continue;
+        const fr = { canvas: c, lines, w: c.width, h: c.height, guide: inGuide };
         setFrame(fr);
-        await suggest(FIELD[k], c, lines);
+        if (inGuide) setReading(lines.filter((l) => /\d/.test(l.text)).map((l) => l.text).join('  ').slice(0, 40));
+        await suggest(FIELD[k], c, lines, false, fr);
         if (lines.length) collect(k, fr);
         await sleep(needsText ? 60 : 400);
       }
     })();
-    const onResize = () => setTick((x) => x + 1);
-    addEventListener('resize', onResize);
+    // rámečky nápisů se přepočítají i při změně výšky panelu (výřez čísla ↔ pole k opravě), nejen při otočení
+    const resized = new ResizeObserver(() => setTick((x) => x + 1));
+    resized.observe(viewRef.current);
     return () => {
       stopped = true;
       stream?.getTracks().forEach((t) => t.stop());
-      removeEventListener('resize', onResize);
+      resized.disconnect();
     };
   }, []);
 
@@ -296,6 +312,11 @@ export function Trainer({ onClose }) {
     c.height = frame.h;
     c.getContext('2d').drawImage(frame.canvas, 0, 0);
   }, [frozen, frame]);
+
+  // paměť vozů pro doplnění nepřečteného začátku čísla (přetřené „83“) – jednou při otevření, jako ve skeneru
+  useEffect(() => {
+    db.wagons().then((list) => { knownNums.current = indexWagons(list.map((w) => w.number)); }, () => {});
+  }, []);
 
   // údaje vozu z paměti (jen jako nápověda)
   useEffect(() => {
@@ -319,8 +340,9 @@ export function Trainer({ onClose }) {
 
   // Návrh hodnoty kroku: u voleb natrénovaná síť (pokud už je), jinak pravidlo nad přečteným textem.
   // Z živé kamery až po shodě ve více snímcích (hlasování), z fotky hned (single).
-  // Co vozmistr už sám zvolil nebo napsal, se nepřepíše.
-  async function suggest(f, canvas, lines, single = false) {
+  // Co vozmistr už sám zvolil nebo napsal, se nepřepíše. fr = snímek, ze kterého se čte (k nabídnutému číslu).
+  async function suggest(f, canvas, lines, single = false, fr = { canvas, lines, w: canvas.width, h: canvas.height }) {
+    if (f.type === 'number') return suggestNumber(lines, single, fr);
     const v = vote.current;
     const pick = (box, value) => {
       if (single) return value ?? null;
@@ -388,6 +410,80 @@ export function Trainer({ onClose }) {
     }
   }
 
+  // Číslo vozu jako ve skeneru: samo se přijme jen „jisté“ číslo (kontrolní číslice, stát, skupiny 2-2-4-3-1) ve dvou
+  // snímcích po sobě, s pouhou platnou kontrolní číslicí se nabídne k ťuknutí. Z fotky / zachyceného snímku hned.
+  function suggestNumber(lines, single, fr) {
+    const cands = numberCandidates(lines, knownNums.current).filter((c) => c.valid).slice(0, 3);
+    const top = cands.find((c) => c.sure) ?? cands[0];
+    setCand(top ? { value: top.number, lines: top.lines, sure: top.sure, stable: single } : null);
+    // napsané nebo opravené číslo se nepřepíše – čísla z fotky se pak jen nabídnou
+    const keep = live.current.touched;
+    const item = (c, number = c.number) => ({ number, filled: c?.filled, lines: c?.lines ?? [], shot: shot(fr.canvas, fr.lines, c?.lines), frame: fr });
+    if (single) {
+      const sure = cands.find((c) => c.sure);
+      if (sure && !keep) return showNumber(item(sure), false);
+      offerNumbers(cands.map((c) => item(c)));
+      toast(!cands.length ? 'Číslo se nepodařilo přečíst. Vyfoťte ho zblízka, nebo ho napište.'
+        : cands.length > 1 ? 'Je tu víc možných čísel – ťukněte na správné.'
+          : sure ? 'Ťukněte na přečtené číslo a porovnejte ho s výřezem.'
+            : 'Číslo se nepodařilo přečíst jistě – když souhlasí, ťukněte na něj.');
+      return;
+    }
+    if (keep) return;
+    const votes = numVotes.current;
+    for (const [k, x] of votes) votes.set(k, { sure: x.sure * DECAY, valid: x.valid * DECAY });
+    for (const c of cands) {
+      const x = votes.get(c.number) ?? { sure: 0, valid: 0 };
+      votes.set(c.number, { sure: x.sure + (c.sure ? 2 : 0), valid: x.valid + 1 });
+    }
+    const best = [...votes].sort((a, b) => b[1].sure - a[1].sure)[0];
+    if (best && best[1].sure >= ACCEPT) {
+      vibrate(80);
+      showNumber(item(cands.find((c) => c.number === best[0]), best[0]), false);
+    } else {
+      // výřez ke kontrole jen jednou, když se číslo poprvé nabídne (převod na obrázek něco stojí)
+      const isOffered = (n) => offeredNums.current.some((m) => m.number === n);
+      offerNumbers(cands.filter((c) => votes.get(c.number).valid >= MAYBE && !isOffered(c.number)).map((c) => item(c)));
+    }
+  }
+
+  // Nabídka se jen doplňuje (pořadí zůstává, ať se tlačítko neposune pod prstem) – nezmizí, když kamera odjede.
+  function offerNumbers(items) {
+    const fresh = items.filter((m) => !offeredNums.current.some((x) => x.number === m.number));
+    if (!fresh.length) return;
+    offeredNums.current = [...offeredNums.current, ...fresh].slice(-MAX_MAYBE);
+    setMaybe(offeredNums.current);
+  }
+
+  // Přijaté nebo ťuknuté číslo: výřez nad číslem k porovnání; uloží se snímek, na kterém se číslo přečetlo.
+  function showNumber(m, touchedNow = true) {
+    setFound(m);
+    setFrame(m.frame);
+    setInput(formatNumber(m.number));
+    setCand({ value: m.number, lines: m.lines, sure: true, stable: true });
+    setTapped(null);
+    if (touchedNow) setTouched(true);
+  }
+
+  // Znovu: zpět k živé kameře, číslo se čte znovu
+  function rescan() {
+    setFound(null);
+    setFrozen(false);
+    setTapped(null);
+    setCaughtFrom(null);
+    setTouched(false);
+    setInput('');
+    setCand(null);
+    numVotes.current.clear();
+  }
+
+  // Opravit: číslo zůstane v poli k úpravě, snímek se zastaví (ťuknutím na nápis jde vzít jiný řádek)
+  function editNumber() {
+    setFound(null);
+    setFrozen(true);
+    setTouched(true);
+  }
+
   // Ostatní nepotvrzené údaje ve stejném snímku: z živé kamery po shodě ve dvou snímcích po sobě, z fotky hned.
   // Zapamatuje se hodnota i snímek, na kterém je; vozmistr ji potvrdí, až na ni přijde řada (nic se neuloží samo).
   function collect(stepKey, fr, single = false) {
@@ -417,6 +513,11 @@ export function Trainer({ onClose }) {
   // Údaj přečtený už při jiném kroku se ukáže na zastaveném snímku, kde byl, a čeká na potvrzení.
   function goTo(key, vals = values, caughtNow = caught) {
     for (const b of Object.values(vote.current)) b.clear();
+    numVotes.current.clear();
+    offeredNums.current = [];
+    setMaybe([]);
+    setFound(null);
+    setReading('');
     setCurrent(key);
     setFrozen(false);
     setCand(null);
@@ -454,7 +555,7 @@ export function Trainer({ onClose }) {
       setFrame(c.frame);
       setFrozen(true);
       // návrh ze zapamatovaného snímku (i barva rámečku, roky revize); stav se překreslí až po tomto volání
-      live.current = { ...live.current, key, frozen: true, touched: false, plateTouched: false, values: vals };
+      live.current = { ...live.current, key, frozen: true, touched: false, plateTouched: false, values: vals, found: null };
       suggest(f, c.frame.canvas, c.frame.lines, true);
     }
   }
@@ -463,7 +564,7 @@ export function Trainer({ onClose }) {
   // potvrzení se aplikace vrátí sem (nextKey). Ne, když vozmistr už v kroku něco zvolil nebo napsal (nabídne se
   // po potvrzení), a sám každý údaj jen jednou. Z Fotky se nenabízí hned – snímek je zastavený a ukazuje tento krok.
   useEffect(() => {
-    if (!field || frozen || touched || caughtFrom) return;
+    if (!field || frozen || touched || caughtFrom || found) return;
     const k = order.find((x) => x !== current && values[x] === undefined && caught[x] && !offered.current.has(x));
     if (!k) return;
     back.current ??= current;
@@ -536,7 +637,7 @@ export function Trainer({ onClose }) {
       const fr = { canvas: c, lines, w: c.width, h: c.height };
       setFrame(fr);
       setFrozen(true);
-      await suggest(field, c, lines, true);
+      await suggest(field, c, lines, true, fr);
       collect(field.key, fr, true);
     } catch (e) {
       toast(`Fotku se nepodařilo přečíst: ${e.message}`);
@@ -757,9 +858,10 @@ export function Trainer({ onClose }) {
 
   // Který nápis je potvrzený údaj: ten, na který vozmistr ťukl, jinak řádky se stejnou hodnotou;
   // u revize (opravený text se s přečteným nemusí shodovat) řádek s nápisem REV.
+  // Číslo doplněné z paměti vozů (začátek se nepřečetl) celé v žádném řádku není – pak řádky, ze kterých se složilo.
   function matchedLines(value) {
     const m = matchingLines(field, frame.lines, value);
-    return m.length || field.type !== 'text' ? m : cand?.lines ?? [];
+    return m.length ? m : field.type === 'text' || cand?.value === value ? cand?.lines ?? [] : m;
   }
 
   function confirmCheck(value) {
@@ -805,8 +907,13 @@ export function Trainer({ onClose }) {
   let boxes = null;
   // video i zastavený snímek vyplňují celou plochu .view – přepočet se dělá podle ní
   // (zastavený snímek je při prvním vykreslení ještě skrytý a měl by nulovou velikost)
-  if (frame && viewRef.current && !done) {
-    const { s, ox, oy } = mapping(viewRef.current, frame.w, frame.h, frozen ? 'contain' : 'cover');
+  // výřez z rámečku čísla vozu leží v živém obraze přesně v rámečku; po přijetí čísla se rámečky nekreslí
+  const inGuide = frame?.guide && !frozen;
+  if (frame && viewRef.current && !done && !(found && !frozen) && (!inGuide || guideRef.current)) {
+    const v = viewRef.current.getBoundingClientRect();
+    const g = inGuide ? guideRef.current.getBoundingClientRect() : null;
+    const { s, ox, oy } = g ? { s: g.width / frame.w, ox: g.left - v.left, oy: g.top - v.top }
+      : mapping(viewRef.current, frame.w, frame.h, frozen ? 'contain' : 'cover');
     boxes = frame.lines.map((l, i) => html`<button type="button" class=${`box ${hit.has(i) ? (tapped === i ? 'tap' : 'hit') : ''}`}
       style=${`left:${ox + l.x * s}px;top:${oy + l.y * s}px;width:${l.w * s}px;height:${l.h * s}px`}
       aria-label=${l.text} onClick=${() => tapLine(i)}></button>`);
@@ -930,6 +1037,23 @@ export function Trainer({ onClose }) {
       </div>`;
   }
 
+  // Přečtené číslo vozu jako ve skeneru: nahoře výřez snímku, pod ním číslo; s ním se potvrdí i nápravy.
+  function numberFound() {
+    return html`<div class="compare">
+        ${found.shot && html`<img class="shot" src=${found.shot} alt="Výřez snímku s číslem" />`}
+        <div class="found"><${WagonNumber} number=${found.number} /></div>
+      </div>
+      <div class="hint" style="text-align:center;margin-top:0">Nahoře snímek, pod ním přečtené číslo – porovnejte je.</div>
+      ${found.filled && html`<div class="hint" style="text-align:center"><b>Začátek čísla se na voze nepřečetl</b> – doplněný podle ${found.filled === 'vuz'
+        ? 'vozu se stejným koncem čísla, který aplikace zná' : 'vozů stejné řady, které aplikace zná'}. Porovnejte ho s vozem.</div>`}
+      ${axlesRow()}
+      <div class="row" style="margin-top:.6rem">
+        <button class="btn" onClick=${rescan}>Znovu</button>
+        <button class="btn" onClick=${editNumber}>Opravit</button>
+        <button class="btn ok" style="flex:1" onClick=${confirm}><${Icon} name="check" /> Potvrdit</button>
+      </div>`;
+  }
+
   const knownValue = field?.type === 'loadbrake' && known
     ? formatLoad({ empty: known.bw?.P_prazdny, half: known.bw?.P_polo, loaded: known.bw?.P_lozeny, change: known.change_t, change2: known.change2_t, max: known.bw_max }) || null
     : field?.type === 'force' && known ? describeForce(wagonForce(known)) || null
@@ -943,12 +1067,14 @@ export function Trainer({ onClose }) {
       <canvas ref=${stillRef} class="still" hidden=${!frozen}></canvas>
       <div class="boxes">${boxes}</div>
       ${closeup && camera === 'live' && !frozen && html`<div class="closeup" aria-hidden="true"><span>${closeup} ať vyplní rámeček</span></div>`}
+      ${field?.type === 'number' && camera === 'live' && !frozen && html`<div ref=${guideRef} class=${`guide ${found ? 'hit' : ''}`}></div>
+        <div class="reading">${!found && reading}</div>`}
       ${flash && html`<div class="flash" key=${flash.key}></div>
         <div class="saved-shot" key=${`s${flash.key}`}><img src=${flash.url} alt="" />
           <div><b>Uloženo pro trénink</b><span>${flash.text}</span></div></div>`}
       <div class="top">
         <button class="iconbtn" onClick=${onClose} aria-label="Zavřít"><${Icon} name="close" /></button>
-        ${frozen && !done && camera === 'live' && html`<button class="btn small" onClick=${() => { setFrozen(false); setTapped(null); setCaughtFrom(null); }}>
+        ${frozen && !done && camera === 'live' && html`<button class="btn small" onClick=${() => { setFrozen(false); setTapped(null); setCaughtFrom(null); setFound(null); }}>
           <${Icon} name="camera" size=${18} /> Zpět ke kameře</button>`}
         <span class="spacer"></span>
         ${camera === 'live' && html`<${LightButtons} light=${light} />`}
@@ -961,7 +1087,8 @@ export function Trainer({ onClose }) {
         <div class="ask-hint">${!ready ? 'Načítám rozpoznávání…'
           : caughtFrom ? html`<b>Přečteno už při kroku ${FIELD[caughtFrom].short}</b> – zkontrolujte a potvrďte${
             back.current && back.current !== current ? `, pak zpět na ${FIELD[back.current].short}` : ''}.`
-          : closeup ? `${field.hint ? `${field.hint} – ` : ''}zblízka: ${closeup.toLowerCase()} ať vyplní rámeček` : field.hint}</div>
+          : closeup ? `${field.hint ? `${field.hint} – ` : ''}zblízka: ${closeup.toLowerCase()} ať vyplní rámeček`
+          : field.type === 'number' && !found && !frozen && camera === 'live' ? 'Namiřte na číslo vozu, ať je celé v rámečku' : field.hint}</div>
       </div>`}
     </div>
 
@@ -977,7 +1104,12 @@ export function Trainer({ onClose }) {
               <button class="btn" style="flex:1" onClick=${() => goTo(order.at(-1))}>Zpět</button>
               <button class="btn ok big" style="flex:2" onClick=${saveWagon}><${Icon} name="check" /> Uložit a další vůz</button>
             </div>`
+        : field.type === 'number' && found ? numberFound()
         : html`
+          ${field.type === 'number' && maybe.length > 0 && html`<div class="hint" style="margin-top:0">Možná je to (ťukněte pro kontrolu):</div>
+            <div class="chips" style="margin-bottom:.5rem">
+              ${maybe.map((m) => html`<button type="button" class="chip" onClick=${() => showNumber(m)}>${formatNumber(m.number)}</button>`)}
+            </div>`}
           ${field.type === 'weight' ? weightPanel() : field.type === 'revision' ? revisionPanel() : field.type === 'loadbrake' ? loadPanel()
             : field.type === 'force' ? forcePanel() : field.type === 'switch'
             ? html`<${Seg} value=${choice} options=${field.options} bad=${field.bad} onChange=${(v) => { setChoice(v); setTouched(true); }} />

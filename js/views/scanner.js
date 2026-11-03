@@ -11,13 +11,14 @@ import { Icon, NumberInput, PhotoButton, WagonNumber, vibrate } from '../ui.js';
 import { useCameraLight, LightButtons, BrightnessSlider, applyGain } from '../light.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const DECAY = 0.8;      // hlasy z předchozích snímků slábnou
-const ACCEPT = 3.2;     // „jisté“ číslo (2 body) ve dvou snímcích po sobě
-const MAYBE = 1.8;      // platná kontrolní číslice aspoň ve dvou snímcích → nabídnout
-const MAX_MAYBE = 4;    // nabídnutá čísla zůstávají k výběru, při dalších vypadne nejstarší
+// hlasování, rámeček a výřez ke kontrole bere i krok čísla vozu v tréninku (trainer.js)
+export const DECAY = 0.8;      // hlasy z předchozích snímků slábnou
+export const ACCEPT = 3.2;     // „jisté“ číslo (2 body) ve dvou snímcích po sobě
+export const MAYBE = 1.8;      // platná kontrolní číslice aspoň ve dvou snímcích → nabídnout
+export const MAX_MAYBE = 4;    // nabídnutá čísla zůstávají k výběru, při dalších vypadne nejstarší
 
 // Rámeček na obrazovce → výřez ve skutečném obrazu kamery (video je roztažené přes object-fit: cover).
-function guideRegion(video, guide) {
+export function guideRegion(video, guide) {
   const vr = video.getBoundingClientRect();
   const g = guide.getBoundingClientRect();
   const vw = video.videoWidth;
@@ -30,7 +31,7 @@ function guideRegion(video, guide) {
   return { x, y, w: Math.min(vw - x, g.width / scale), h: Math.min(vh - y, g.height / scale) };
 }
 
-function grab(video, r, canvas) {
+export function grab(video, r, canvas) {
   const k = Math.min(1, 1280 / r.w);
   canvas.width = Math.round(r.w * k);
   canvas.height = Math.round(r.h * k);
@@ -39,7 +40,7 @@ function grab(video, r, canvas) {
 }
 
 // Výřez snímku kolem řádků, ze kterých se číslo složilo (ke kontrole), jako obrázek do panelu.
-function shot(canvas, lines, idx) {
+export function shot(canvas, lines, idx) {
   const boxes = (idx ?? []).map((i) => lines[i]).filter(Boolean);
   let r = { x: 0, y: 0, w: canvas.width, h: canvas.height };
   if (boxes.length) {
