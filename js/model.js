@@ -43,20 +43,35 @@ const DECIMAL = /\b\d+,\d+\b|\b\d{1,2}\.\d+\b/g;
 // Kód státu bývá nalepený na značku držitele („80D-DB“, „54CZ-ČDC“, „80D-“ se značkou v dalším rámečku) – oddělí se,
 // jinak by se D četlo jako 0.
 const KEEPER = /(\d)(?=\p{Lu}{1,3}-(?:\p{Lu}{2}|\s|$))/gu;
-// Dvojčíslí nalepené na RIV/TEN/PPW („31RIV“) – oddělí se, jinak slovo s převahou písmen vypadne celé.
-const MARK = /(\d)(?=(?:RIV|TEN|PPW)\b)/g;
+// Kód státu nalepený na svou značku i bez pomlčky za ní („80D“ u přetřeného držitele, „80D-V“, „54CZ“) – oddělí se,
+// jen když značka ke kódu patří (80 = D, 54 = CZ …), aby se „40O“ v těle čísla dál četlo jako 400.
+const MARKS = { 10: 'FIN', 20: 'RUS', 21: 'BY', 22: 'UA', 23: 'MD', 24: 'LT', 25: 'LV', 26: 'EST', 27: 'KZ', 28: 'GE',
+  41: 'AL', 44: 'BIH', 50: 'BIH', 51: 'PL', 52: 'BG', 53: 'RO', 54: 'CZ', 55: 'H', 56: 'SK', 57: 'AZ', 58: 'AM', 59: 'KS',
+  60: 'IRL', 62: 'MNE', 65: 'MK', 70: 'GB', 71: 'E', 72: 'SRB', 73: 'GR', 74: 'S', 75: 'TR', 76: 'N', 78: 'HR', 79: 'SLO',
+  80: 'D', 81: 'A', 82: 'L', 83: 'I', 84: 'NL', 85: 'CH', 86: 'DK', 87: 'F', 88: 'B', 94: 'P' };
+const GLUED = /\b(\d{2})(\p{Lu}{1,3})(?![\p{L}\d])/gu;
+const unglue = (m, cc, mark) => (MARKS[cc] === mark ? `${cc} ${mark}` : m);
+// Dvojčíslí nalepené na RIV/TEN/PPW („31RIV“, i „31RV“) – oddělí se, jinak slovo s převahou písmen vypadne celé.
+const MARK = /(\d)(?=(?:RI?V|TEN|PPW)\b)/g;
 // Mezera mezi dvojčíslími přečtená jako tečka („31.54 3939 735-9“) – před osmi číslicemi to není desetinné číslo.
 const PAIR_DOT = /\b(\d{2})\.(\d{2})(?=\s?\d{4}\s?\d{3})/g;
+// … ani samotné „31.54“ v rámečku nad tělem nebo vedle něj, když je za tečkou kód státu
+const PAIR_ALONE = /^\s*(\d{2})\.(\d{2})\s*$/;
+const unpair = (m, a, b) => (COUNTRIES.has(Number(b)) ? `${a} ${b}` : m);
 
-// Řádky s telefonem, e-mailem nebo adresou držitele („D-55252 Mainz-Kastel“, „+496134/94844-0“) – jejich číslice
-// složily na jednom voze falešné číslo s platnou kontrolní číslicí.
+// Řádky s telefonem, e-mailem nebo adresou držitele („D-55252 Mainz-Kastel“, „+496134/94844-0“, „CZ 160 00“,
+// „Komornická 7, Praha 6“, „421 01 Litoměřice“) – jejich číslice složily falešné číslo s platnou kontrolní číslicí
+// nebo se vmísily mezi řádky čísla vedle nich.
 const CONTACT = /\+\s?\d|@|\b(tel|fax|e-?mail|www|gmbh|str(aße|asse)?\.?)\b|\b[A-Z]-\d{4,5}\b/i;
+const ADDRESS = /\b(?:CZ|SK)[- ]?\d{3} ?\d{2}\b|\b\d{3} \d{2} \p{Lu}\p{Ll}{3,}|\bPraha\b/u;
 
 function digitTokens(lines) {
   const tokens = [];
   for (const [li, l] of lines.entries()) {
-    if (CONTACT.test(l.text)) continue;
-    for (const word of l.text.replace(PAIR_DOT, '$1 $2').replace(DECIMAL, ' ').replace(KEEPER, '$1 ').replace(MARK, '$1 ').split(/[^0-9A-Za-z|!]+/)) {
+    if (CONTACT.test(l.text) || ADDRESS.test(l.text)) continue;
+    const text = l.text.replace(PAIR_ALONE, unpair).replace(PAIR_DOT, '$1 $2').replace(DECIMAL, ' ')
+      .replace(KEEPER, '$1 ').replace(GLUED, unglue).replace(MARK, '$1 ');
+    for (const word of text.split(/[^0-9A-Za-z|!]+/)) {
       const digits = word.replace(/\D/g, '').length;
       if (!digits || digits / word.length < 0.6) continue;
       const d = [...word].map((c) => (/\d/.test(c) ? c : LOOKALIKE[c] ?? '')).join('');
@@ -170,34 +185,53 @@ export function indexWagons(numbers) {
 /**
  * Číslo podle rozložení na voze, nezávisle na pořadí řádků (na novějších vozech „33 RIV“ / „80 D-TWA“ / „2742 187-8“:
  * při mírném náklonu se řádky slijí a pořadí se pomíchá, mezi části vlezou cizí číslice). Tělo = osm číslic
- * v jednom řádku (i rozdělených „495 6 322-2“); před ním dvě dvojčíslí, každé na začátku svého řádku:
- * pod sebou zarovnaná vlevo s tělem (nad ním), nebo vlevo od těla ve stejném řádku. Vrací out = [[a, b, tělo]]
+ * v jednom řádku (i rozdělených „495 6 322-2“ nebo v obdélnících těsně vedle sebe); před ním dvě dvojčíslí,
+ * každé na začátku svého řádku: pod sebou zarovnaná vlevo s tělem (nad ním), nebo vlevo od těla ve stejném
+ * řádku (tam i obě v jednom obdélníku „84 54“). Vrací out = [[a, b, tělo]]
  * a bodies = [{ body, cc }] – každé tělo s dvojčíslím těsně nad ním nebo před ním (kód státu), pokud je.
  */
 function numberBlocks(lines, tokens) {
   const out = [];
   const bodies = [];
   const box = (t) => lines[t.li];
-  // svislá poloha kolmo na převažující sklon řádků (jako sortLines v ocr.js): na šikmém snímku jsou řádky
-  // „33 RIV“ / „80 D-TWA“ / tělo podle středů obdélníků skoro ve stejné výšce
-  const angles = lines.map((l) => l.angle).filter((a) => a != null).sort((a, b) => a - b);
-  const tilt = angles.length ? angles[Math.floor(angles.length / 2)] : 0;
+  // svislá poloha kolmo na převažující sklon řádků: na šikmém snímku jsou řádky „33 RIV“ / „80 D-TWA“ / tělo
+  // podle středů obdélníků skoro ve stejné výšce. Sklon = medián vážený plochou obdélníku, řádky bez sklonu
+  // (čtení narovnává až od 2°) se počítají jako rovné – jinak sklon určil drobný text okolo (šikmá cedulka,
+  // tabulka) a rovné řádky čísla se rozešly (sortLines v ocr.js počítá jen narovnané řádky).
+  const angles = lines.map((l) => [l.angle ?? 0, l.w * l.h]).sort((a, b) => a[0] - b[0]);
+  let half = angles.reduce((s, [, w]) => s + w, 0) / 2;
+  const tilt = angles.find(([, w]) => (half -= w) <= 0)?.[0] ?? 0;
   const cy = (t) => -(box(t).x + box(t).w / 2) * Math.sin(tilt) + (box(t).y + box(t).h / 2) * Math.cos(tilt);
   const pairs = tokens.filter((t) => t.first && t.d.length === 2);
+  // obdélníky jen s dvojčíslími („84 54“ vlevo od těla) – vlevo se počítají všechna jejich dvojčíslí
+  const pairBox = (li) => tokens.every((t) => t.li !== li || t.d.length === 2);
   for (const li of new Set(tokens.map((t) => t.li))) {
     const own = tokens.filter((t) => t.li === li);
-    // tělo: souvislá část slov řádku s právě osmi číslicemi (4-3-1, s rozdělením, které čtení přidá)
+    // tělo: souvislá část slov řádku s právě osmi číslicemi (4-3-1, s rozdělením, které čtení přidá), případně
+    // pokračující v obdélnících těsně napravo ve stejné výšce („6992“ „021- 9 Faccs“ – na šikmé fotce jim
+    // čtení může přidělit i různé řádky)
     for (let i = 0; i < own.length; i++) {
+      if (own[i].d.length < 3) continue;
+      const h = own[i].h;
+      const body = [];
       let n = 0;
-      let j = i;
-      while (j < own.length && n < 8) n += own[j++].d.length;
-      if (n !== 8 || own[i].d.length < 3) continue;
-      const body = own.slice(i, j);
+      for (let j = i; j < own.length && n < 8; j++) n += body[body.push(own[j]) - 1].d.length;
+      for (let last = li; n < 8;) {
+        const L = lines[last];
+        const next = tokens.filter((t) => t.first && t.li !== last && !body.includes(t) && box(t).x > L.x + L.w * 0.5
+          && box(t).x - (L.x + L.w) < h * 2 && Math.abs(cy(t) - cy(body.at(-1))) < h * 0.5
+          && Math.max(t.h, h) / Math.min(t.h, h) < 1.4).sort((p, q) => box(p).x - box(q).x)[0];
+        if (!next) break;
+        last = next.li;
+        for (const t of tokens) if (t.li === last && n < 8) n += body[body.push(t) - 1].d.length;
+      }
+      if (n !== 8) continue;
       const B = box(body[0]);
-      const h = body[0].h;
       const yb = cy(body[0]);
       // dvojčíslí bývají menším písmem než tělo (na vozech TSI zhruba polovičním)
       const near = pairs.filter((p) => p.li !== li && Math.max(p.h, h) / Math.min(p.h, h) < 2.6);
+      const side = tokens.filter((p) => p.d.length === 2 && p.li !== li && (p.first || pairBox(p.li))
+        && Math.max(p.h, h) / Math.min(p.h, h) < 2.6);
       // pod sebou: nad tělem, levý okraj do 1,5 výšky těla od levého okraje těla; řádky od sebe aspoň
       // půl výšky svého písma, nejvýš 3 výšky těla
       const above = near.filter((p) => cy(p) < yb && Math.abs(box(p).x - B.x) < h * 1.5).sort((p, q) => cy(p) - cy(q));
@@ -207,8 +241,9 @@ function numberBlocks(lines, tokens) {
       }
       // v jednom řádku: dvě dvojčíslí vlevo od těla ve stejné výšce (samostatné rámečky v pořadí zleva,
       // pak dvojčíslí na začátku řádku těla „52 495 6 322-2“)
-      const left = [...near.filter((p) => Math.abs(cy(p) - yb) < Math.max(p.h, h) * 0.5 && box(p).x + box(p).w <= B.x + h * 0.3
-        && B.x - box(p).x < Math.max(p.h, h) * 8).sort((p, q) => box(p).x - box(q).x), ...own.slice(0, i).filter((t) => t.d.length === 2)];
+      const left = [...side.filter((p) => Math.abs(cy(p) - yb) < Math.max(p.h, h) * 0.5 && box(p).x + box(p).w <= B.x + h * 0.3
+        && B.x - box(p).x < Math.max(p.h, h) * 8).sort((p, q) => box(p).x - box(q).x || tokens.indexOf(p) - tokens.indexOf(q)),
+      ...own.slice(0, i).filter((t) => t.d.length === 2)];
       if (left.length >= 2) out.push([left.at(-2), left.at(-1), body]);
       // kód státu: nejbližší dvojčíslí nad tělem (do 1,5 výšky těla), jinak vlevo ve stejném řádku
       const up = above.filter((p) => yb - cy(p) > p.h * 0.5 && yb - cy(p) < h * 1.5).at(-1);
