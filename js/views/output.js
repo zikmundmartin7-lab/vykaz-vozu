@@ -11,6 +11,8 @@ import { Topbar, Icon, toast } from '../ui.js';
 import { Stats } from './report.js';
 
 const ROWS_PER_PAGE = 20;
+// iPhone a iPad: tisk začíná vždy na výšku (@page landscape nebere) – formulář na šířku se pak zmenší
+const IOS = typeof CSS !== 'undefined' && CSS.supports?.('-webkit-touch-callout', 'none');
 const STRIKE = '—';   // proškrtnuté pole
 
 // Kolonka 46 je na formuláři rozdělená: režim (1.–2.), zem. reg. (3.–4.), číslo (5.–11.), k. č. (12.)
@@ -51,7 +53,7 @@ function fileName(report, ext) {
 function Sheet({ report, entries, offset, page, pages, t }) {
   const last = page === pages;
   const pad = Array.from({ length: ROWS_PER_PAGE - entries.length });
-  return html`<section class="sheet">
+  return html`<section class=${`sheet ${last ? 'last' : ''}`}>
     <div class="sheet-head">
       <div class="sheet-title"><b>Výkaz vozidel pro nákladní vlak</b><span>(vozy a nečinná hnací vozidla)</span></div>
       <div class="hbox"><small>2. Číslo vlaku</small><b>${report.train}</b></div>
@@ -94,7 +96,7 @@ function Sheet({ report, entries, offset, page, pages, t }) {
             <td class="l">${r.destination}</td><td>${r.speed ?? ''}</td><td>${r.track}</td><td class="l">${r.note}</td>
           </tr>`;
         })}
-        ${pad.map(() => html`<tr class="pad"><td>&nbsp;</td>${Array.from({ length: 19 }).map(() => html`<td></td>`)}</tr>`)}
+        ${pad.map(() => html`<tr class="pad"><td>${'\u00a0'}</td>${Array.from({ length: 19 }).map(() => html`<td></td>`)}</tr>`)}
       </tbody>
       <tfoot>
         <tr>
@@ -192,6 +194,7 @@ export function OutputView({ report, save }) {
         ${entries.some((e) => wagonWarnings(e).length) && html`<p class="hint err">U některých vozů jsou neobvyklé hodnoty – zkontrolujte je v kartě vozu (označené červeně).</p>`}
         ${t.brakesOff > 0 && html`<p class="hint err">Vozy s vypnutou brzdou: ${t.brakesOff} (brzdicí váha proškrtnuta).</p>`}
         <p class="hint">Brzdicí procenta = brzdicí váha podle polohy přestavovačů G/P ÷ hmotnost vozů × 100, bez lokomotivy – jen pro kontrolu, na formuláři nejsou.</p>
+        ${IOS && html`<p class="hint">PDF: v nabídce tisku zvolte orientaci <b>Na šířku</b> (iPhone ji sám nenastaví). Hotové PDF uložíte nebo pošlete tlačítkem sdílení nahoře.</p>`}
       </div>
 
       ${Array.from({ length: pages }, (_, p) => html`<div class="sheet-scroll"><${Sheet} report=${report} t=${t}
