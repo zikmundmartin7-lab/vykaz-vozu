@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zkoušky čtení</title>
+<style>
+body{font:14px/1.45 -apple-system,system-ui,sans-serif;margin:12px;max-width:1150px;color:#222;background:#fff}
+h1{font-size:19px;margin:0 0 4px}h2{font-size:15px;margin:18px 0 4px}
+#zaklad,#stav{color:#555;margin:2px 0}#verdikt{font-size:16px;font-weight:600;margin:10px 0}
+button{font:inherit;padding:4px 10px;margin:6px 6px 0 0}
+table{border-collapse:collapse;font-size:13px;margin-top:4px}td,th{padding:2px 8px;text-align:left;border-bottom:1px solid #ddd}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+ul{margin:2px 0;padding-left:18px}li{margin:1px 0}
+.horsi{color:#b00000}.lepsi{color:#0a6e14}.vazne{color:#b00000;font-weight:600}.sedy{color:#777}
+</style></head>
+<body><main>
+<h1>Zkoušky čtení</h1>
+<div id="zaklad"></div>
+<div id="stav">…</div>
+<div><button id="spustit">Spustit znovu</button><button id="znovu">Přečíst fotky znovu</button><button id="ulozit" disabled>Uložit jako základ</button></div>
+<div id="vysledek"></div>
+</main>
+<script type="module">
+// Všechny zkoušky čtení najednou a rozdíly proti uloženému základu (logika v vse.js). Spuštění: launch config
+// „vykaz-testy“ (python3 test/server.py 8771), pak http://localhost:8771/test/vse.html; ?znovu = přečíst všechny fotky
+// znovu, ?rychle = bez umělých nápisů. Výsledek i pro skript: window.__vse { hotovo, chyba?, zhorseni, vazne, … }.
+import { runAll, compare, toBase, loadBase, put } from './vse.js';
+import { APP_VERSION } from '../js/version.js';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const when = (iso) => new Date(iso).toLocaleString('cs-CZ', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const params = new URLSearchParams(location.search);
+let base = null;
+let last = null;
+
+const item = (i, cls = '') => `<li class="${cls}"><b>${esc(i.sekce)}</b> · ${esc(i.id)}: `
+  + (i.bylo !== undefined ? `${esc(i.bylo)} → <b>${esc(i.mam)}</b>` : `<b>${esc(i.mam)}</b>`)
+  + (i.mam === 'ok' || i.ok ? '' : ` <span class="sedy">(správně ${esc(i.chci)})</span>`) + '</li>';
+const list = (title, rows, cls, open = true) => (rows.length
+  ? `<details${open ? ' open' : ''}><summary><h2 style="display:inline">${title} (${rows.length})</h2></summary><ul>${rows.map((i) => item(i, cls)).join('')}</ul></details>`
+  : '');
+
+function render(run, d) {
+  $('zaklad').textContent = base
+    ? `Základ: verze ${base.verze}, uložen ${when(base.ulozeno)}${base.ocr === run.ocr ? '' : ' · čtení (ocr.js nebo sítě) se od základu změnilo'}`
+    : 'Základ zatím není uložený – po kontrole výsledků ho ulož tlačítkem.';
+  $('stav').textContent = `Hotovo za ${Math.round(run.ms / 1000)} s · ${run.items.length} zkoušek · nově přečtených fotek ${run.reads} · verze aplikace ${APP_VERSION}`;
+  const known = new Set(Object.entries(base?.items ?? {}).filter(([, b]) => b.vazne).map(([id]) => id));
+  const verdict = !base ? '' : d.horsi.length
+    ? `<div id="verdikt" class="horsi">Zhoršení: ${d.horsi.length}${d.lepsi.length ? `, zlepšení ${d.lepsi.length}` : ''}</div>`
+    : `<div id="verdikt" class="lepsi">Bez zhoršení${d.lepsi.length ? ` · zlepšení ${d.lepsi.length}` : ''}${d.jinak.length ? ` · jiné změny ${d.jinak.length}` : ''}</div>`;
+  const rows = d.sekce.map((s) => {
+    const worse = base && s.nBase && s.ok < s.okBase;
+    const better = base && s.nBase && s.ok > s.okBase;
+    return `<tr class="${worse ? 'horsi' : better ? 'lepsi' : ''}"><td>${esc(s.sekce)}</td>`
+      + `<td class="n">${base ? (s.nBase ? `${s.okBase}/${s.nBase}` : '–') : ''}</td><td class="n">${s.n ? `${s.ok}/${s.n}` : '–'}</td>`
+      + `<td class="n${s.vazne ? ' vazne' : ''}">${s.vazne || ''}</td></tr>`;
+  }).join('');
+  const failed = run.items.filter((i) => !i.ok);
+  $('vysledek').innerHTML = verdict
+    + list('Zhoršení', d.horsi, 'horsi')
+    + list('Zlepšení', d.lepsi, 'lepsi')
+    + list('Vážné chyby – cizí číslo vozu přijaté jako jisté', d.vazne.map((i) => ({ ...i, sekce: `${known.has(i.id) ? 'známá ze základu · ' : 'NOVÁ · '}${i.sekce}` })), 'vazne')
+    + list('Jiné změny (stále neprošlé, jiná odpověď)', d.jinak, '', d.jinak.length <= 15)
+    + list('Nové zkoušky (v základu nejsou)', d.nove, 'sedy', false)
+    + list('Zkoušky ze základu, které teď chybí', d.chybi, 'sedy', false)
+    + `<h2>Přehled po sekcích</h2><table><tr><th>Sekce</th><th class="n">${base ? 'základ' : ''}</th><th class="n">teď</th><th class="n">vážné</th></tr>${rows}</table>`
+    + list('Všechny neprošlé zkoušky', failed, 'sedy', false);
+  window.__vse = {
+    hotovo: true, verze: APP_VERSION, zaklad: base ? { verze: base.verze, ulozeno: base.ulozeno } : null,
+    zkousek: run.items.length, precteno: run.reads, ms: run.ms,
+    zhorseni: d.horsi, zlepseni: d.lepsi, jinak: d.jinak, vazne: d.vazne, nove: d.nove.length, chybi: d.chybi.length,
+    sekce: d.sekce.map((s) => `${s.sekce}: ${base ? `${s.okBase}/${s.nBase} → ` : ''}${s.ok}/${s.n}${s.vazne ? `, vážné ${s.vazne}` : ''}`),
+  };
+}
+
+async function start(fresh) {
+  for (const b of ['spustit', 'znovu', 'ulozit']) $(b).disabled = true;
+  $('vysledek').innerHTML = '';
+  window.__vse = { hotovo: false };
+  try {
+    base = await loadBase();
+    last = await runAll({ fresh, synthetic: !params.has('rychle'), onProgress: (t) => { $('stav').textContent = t; } });
+    render(last, compare(last.items, base, last));
+    $('ulozit').disabled = false;
+  } catch (e) {
+    $('stav').innerHTML = `<span class="vazne">Chyba: ${esc(e.message)}</span>`;
+    window.__vse = { hotovo: true, chyba: e.message };
+    console.error(e);
+  }
+  $('spustit').disabled = false;
+  $('znovu').disabled = false;
+}
+
+$('spustit').onclick = () => start(false);
+$('znovu').onclick = () => start(true);
+$('ulozit').onclick = async () => {
+  $('ulozit').disabled = true;
+  try {
+    if (base) await put('zaklad-predchozi.json', base);
+    base = toBase(last, APP_VERSION);
+    await put('zaklad.json', base);
+    render(last, compare(last.items, base, last));
+  } catch (e) {
+    $('stav').innerHTML = `<span class="vazne">Chyba: ${esc(e.message)}</span>`;
+    $('ulozit').disabled = false;
+  }
+};
+start(params.has('znovu'));
+</script></body></html>
