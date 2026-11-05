@@ -137,7 +137,7 @@ export function OutputView({ report, save }) {
   const entries = report.entries;
   const pages = Math.max(1, Math.ceil(entries.length / ROWS_PER_PAGE));
 
-  function excel() {
+  async function excel() {
     const col = (header, key, width = 10) => ({ header, width, value: (r) => r[key] ?? '' });
     const columns = [
       col('45. Pořadí', 'pos', 7), col('46. Režim', 'rezim', 8), col('46. Zem. reg.', 'zem', 8), col('46. Číslo', 'cislo', 11),
@@ -159,10 +159,18 @@ export function OutputView({ report, save }) {
       ['64. Čas změny', formatTime(report.change_at)], ['65. Změnil', report.changed_by], ['66. Poznámka', report.change_note],
       ['Počet vozů', t.wagons], ['Vozy s vypnutou brzdou', t.brakesOff], ['Brzdicí procenta (orientačně)', t.lambda],
     ].map(([k, v]) => ({ k, v }));
-    download(buildXlsx([
+    const blob = buildXlsx([
       { name: 'Výkaz vozidel', columns, rows },
       { name: 'Údaje vlaku', columns: [{ header: 'Kolonka', width: 30, value: (r) => r.k }, { header: 'Hodnota', width: 30, value: (r) => r.v ?? '' }], rows: info },
-    ]), fileName(report, 'xlsx'));
+    ]);
+    const name = fileName(report, 'xlsx');
+    // iPhone a iPad: stažený soubor skončí v Souborech → Stažené – nabídka sdílení (poslat, Uložit do Souborů);
+    // jen soubor bez názvu a textu, jinak Disk v iPhonu uloží místo souboru jen text
+    const file = new File([blob], name, { type: blob.type });
+    if (IOS && navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); return; } catch (e) { if (e.name === 'AbortError') return; }
+    }
+    download(blob, name);
   }
 
   async function share() {
@@ -219,6 +227,6 @@ export function OutputView({ report, save }) {
     <div class="bottombar">
       <button class="btn" onClick=${share}><${Icon} name="share" /> Sdílet</button>
       <button class="btn" onClick=${() => window.print()}><${Icon} name="print" /> PDF</button>
-      <button class="btn primary" onClick=${excel}><${Icon} name="download" /> Excel</button>
+      <button class="btn primary" onClick=${excel}><${Icon} name=${IOS ? 'share' : 'download'} /> Excel</button>
     </div>`;
 }
