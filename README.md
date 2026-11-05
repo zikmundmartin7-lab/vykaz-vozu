@@ -78,7 +78,7 @@ js/db.js                                  úložiště v telefonu (IndexedDB)
 js/xlsx.js                                zápis Excelu a ZIPu bez knihoven
 js/views/*.js                             obrazovky: výkazy, výkaz, skener, vůz, výstup, data, trénink (trainer.js)
 models/                                   sítě PP-OCRv5 mobile (det.onnx, rec_latin.onnx – latinka s českou diakritikou, slovník; Apache 2.0)
-vendor/                                   Preact + htm, onnxruntime-web 1.20.1
+vendor/                                   Preact + htm, onnxruntime-web 1.20.1 – licence cizích součástí: LICENCE-TRETICH-STRAN.md
 training/trenink_prestavovacu.ipynb       trénink sítí na přestavovače v Colabu
 tools/ikony.py                            ikony aplikace
 tools/era_rady.py                         převod tabulky ERA appendix_6_p9_en.xls na data/rady.json
