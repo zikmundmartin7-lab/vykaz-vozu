@@ -10,7 +10,7 @@ import {
 import { db } from '../db.js';
 import { seriesInfo } from '../series.js';
 import { readText } from '../ocr.js';
-import { brakeModels, predictSwitch } from '../brake.js';
+import { brakeModels, predictSwitch, SURE } from '../brake.js';
 import { HAND_BRAKE, HAND_BRAKE_MEANING, parseRevision, formatRevision, maskDate, revisionStatus, formatDay } from '../fields.js';
 import { Topbar, Icon, Seg, NumField, NumberInput, PhotoButton, BlobImg, toast, go } from '../ui.js';
 
@@ -132,15 +132,14 @@ export function EntryView({ report, entryId, save }) {
     try {
       const bmp = await createImageBitmap(file);
       const blob = await toJpeg(bmp, 1024);
-      let label = e[kind];
+      const label = e[kind];
       let predicted = null;
       let patch = {};
       if (SWITCHES[kind]) {
+        // síť polohu jen navrhne (predHint), zapíše ji až vozmistr ťuknutím
         const p = await predictSwitch(kind, bmp).catch(() => null);
         if (p) {
-          predicted = p;
-          label = p.label;
-          patch = { [kind]: label };
+          predicted = { label: p.label, prob: p.prob };
           setPred((x) => ({ ...x, [kind]: p }));
         }
       } else if (kind === 'napis') {
@@ -155,6 +154,7 @@ export function EntryView({ report, entryId, save }) {
       setPhotos((x) => [...x, s]);
       setE((prev) => ({ ...prev, ...patch, samples: [...prev.samples, s.id] }));
       if (SWITCHES[kind] && !predicted) toast('Fotka uložena pro trénink sítě – polohu zvolte ťuknutím.');
+      else if (SWITCHES[kind] && predicted.prob < SURE) toast('Síť si polohou není jistá – zvolte ji ťuknutím.');
     } catch (err) {
       toast(`Fotku se nepodařilo zpracovat: ${err.message}`);
     }
@@ -260,6 +260,17 @@ export function EntryView({ report, entryId, save }) {
   const photoBtn = (kind, label, icon = 'camera') => html`<${PhotoButton} class="btn small"
     onPhoto=${(f) => addPhoto(kind, f)} disabled=${busy === kind}>
     <${Icon} name=${icon} size=${18} /> ${busy === kind ? 'Čtu…' : label}</${PhotoButton}>`;
+  // Poloha ze sítě: jistou nabídne k potvrzení ťuknutím, nejistou jen ukáže.
+  const predHint = (kind) => {
+    const p = pred[kind];
+    const name = optionLabel(kind, p.label);
+    const pct = Math.round(p.prob * 100);
+    const what = html`<b>${name}</b> (${pct} %)`;
+    return html`<div class="hint"><${Icon} name="brain" size=${14} /> ${
+      !p.sure ? html`Síť si není jistá (<b>${name}</b> ${pct} %) – zvolte polohu ťuknutím.`
+      : p.label === e[kind] ? html`Síť z fotky: ${what} – souhlasí.`
+      : html`Síť z fotky: ${what} <button class="linkbtn" onClick=${() => update({ [kind]: p.label })}>Zvolit ${name}</button>`}</div>`;
+  };
 
   return html`
     <${Topbar} title=${`${index + 1}. vůz`} back=${`#/vykaz/${report.id}`} />
@@ -286,8 +297,7 @@ export function EntryView({ report, entryId, save }) {
         </div>
         <${Seg} value=${e[kind]} options=${sw.options} onChange=${(v) => update({ [kind]: v })}
           bad=${kind === 'kohout' ? ['vypnuta'] : kind === 'rucni' ? ['zabrzdena'] : []} />
-        ${pred[kind] && html`<div class="hint"><${Icon} name="brain" size=${14} /> Síť z fotky: <b>${optionLabel(kind, pred[kind].label)}</b>
-          (${Math.round(pred[kind].prob * 100)} %)${pred[kind].label !== e[kind] ? ' – opraveno ručně' : ''}</div>`}
+        ${pred[kind] && predHint(kind)}
         ${!models[kind] && thumbs(kind).length > 0 && html`<div class="hint">Síť pro tento přestavovač se teprve učí – fotky se ukládají s polohou, kterou zvolíte.</div>`}
         ${kind === 'naklad' && loadHint(e)}
         ${kind === 'kohout' && e.kohout === 'vypnuta' && html`<div class="hint">Brzdicí váha se ve výkazu proškrtne.</div>`}

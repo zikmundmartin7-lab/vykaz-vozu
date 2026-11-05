@@ -8,6 +8,10 @@ import { ort, BASE, createSession } from './ort.js';
 const MEAN = [0.485, 0.456, 0.406];
 const STD = [0.229, 0.224, 0.225];
 
+// Polohu síť navrhne, jen když si je jistá aspoň takhle (sure); jinak ji vozmistr zvolí sám.
+// Křížová kontrola po vozech 5. 11. (G/P): s jistotou ≥ 90 % správně 35 z 36 fotek, odpoví asi u 60 % fotek.
+export const SURE = 0.9;
+
 let config = null;
 const sessions = {};
 
@@ -19,7 +23,7 @@ export async function brakeModels() {
 }
 
 /**
- * Odhad polohy přestavovače z fotky. Vrací { label, prob } nebo null, když síť pro tento druh ještě není.
+ * Odhad polohy přestavovače z fotky. Vrací { label, prob, sure } nebo null, když síť pro tento druh ještě není.
  * Fotka se zmenší na čtverec size × size celá (bez ořezu) – stejně jako při tréninku.
  */
 export async function predictSwitch(kind, src) {
@@ -32,6 +36,8 @@ export async function predictSwitch(kind, src) {
   c.width = size;
   c.height = size;
   const g = c.getContext('2d', { willReadFrequently: true });
+  // s vyhlazením jako PIL v sešitu – výchozí zmenšení prohlížeče (1280 → 224) měnilo jistotu sítě o desítky procent
+  g.imageSmoothingQuality = 'high';
   g.drawImage(src, 0, 0, size, size);
   const px = g.getImageData(0, 0, size, size).data;
   const n = size * size;
@@ -45,5 +51,6 @@ export async function predictSwitch(kind, src) {
   const exp = logits.map((v) => Math.exp(v - max));
   const sum = exp.reduce((a, b) => a + b, 0);
   const best = exp.indexOf(Math.max(...exp));
-  return { label: cfg.classes[best], prob: exp[best] / sum };
+  const prob = exp[best] / sum;
+  return { label: cfg.classes[best], prob, sure: prob >= SURE };
 }

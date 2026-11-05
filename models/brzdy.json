@@ -1,1 +1,13 @@
-{}
+{
+  "rezim": {
+    "file": "rezim_20261105_1108.onnx",
+    "classes": [
+      "G",
+      "P"
+    ],
+    "size": 224,
+    "accuracy": 0.875,
+    "brightness_only": 0.771,
+    "trained": "20261105_1108"
+  }
+}

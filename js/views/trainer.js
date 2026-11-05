@@ -338,7 +338,7 @@ export function Trainer({ onClose }) {
     if (current === 'cislo' && !axlesTouched) setAxles(info?.axles?.sure ? String(info.axles.value) : null);
   }, [info, current]);
 
-  // Návrh hodnoty kroku: u voleb natrénovaná síť (pokud už je), jinak pravidlo nad přečteným textem.
+  // Návrh hodnoty kroku: pravidlo nad přečteným textem, jinak natrénovaná síť (pokud už je a je si jistá – p.sure).
   // Z živé kamery až po shodě ve více snímcích (hlasování), z fotky hned (single).
   // Co vozmistr už sám zvolil nebo napsal, se nepřepíše. fr = snímek, ze kterého se čte (k nabídnutému číslu).
   async function suggest(f, canvas, lines, single = false, fr = { canvas, lines, w: canvas.width, h: canvas.height }) {
@@ -352,8 +352,8 @@ export function Trainer({ onClose }) {
     const keep = () => live.current.touched;
     if (f.type === 'switch') {
       const p = await predictSwitch(f.key, canvas).catch(() => null);
-      const found = p ? null : extractField(f, lines);
-      const best = pick(v.main, p?.label ?? found?.value);
+      const found = extractField(f, lines);
+      const best = pick(v.main, found?.value ?? (p?.sure ? p.label : null));
       setPred(p);
       setCand(found ? { ...found, stable: best === found.value } : null);
       if (best && !keep()) setChoice(best);
@@ -377,11 +377,11 @@ export function Trainer({ onClose }) {
         if (frameValue) setChoice(frameValue);
       }
     } else if (f.type === 'loadbrake') {
-      // poloha páky: natrénovaná síť (až bude), samočinný podle nápisu; brzdicí váhy a přestavná hmotnost z nápisu
+      // poloha páky: samočinný podle nápisu, jinak natrénovaná síť (až bude, jen jistá); brzdicí váhy a přestavná hmotnost z nápisu
       const p = await predictSwitch(f.key, canvas).catch(() => null);
       const found = extractLoadBrake(lines);
       const best = Object.fromEntries(LOAD_KEYS.map((k) => [k, pick((v[k] ??= votes()), found?.values[k])]));
-      const pos = pick(v.main, p?.label ?? (found?.auto ? 'auto' : null));
+      const pos = pick(v.main, found?.auto ? 'auto' : p?.sure ? p.label : null);
       setPred(p);
       setCand(found ? { ...found, stable: LOAD_KEYS.every((k) => found.values[k] == null || best[k] === found.values[k]) } : null);
       if (pos && !keep()) setChoice(pos);
@@ -1011,7 +1011,7 @@ export function Trainer({ onClose }) {
       <div class="hint">
         ${cand ? html`Aplikace čte: <b>${formatLoad(cand.values) || 'samočinné brzdění podle nákladu'}</b>${cand.stable ? '' : ' (ověřuji…)'}`
           : 'Namiřte na štítek u páky (nahoře brzdicí váhy, dole přestavná hmotnost), u samočinného na nápis „MAX … t“.'}
-        ${pred && html` · síť: <b>${displayValue(field, pred.label)}</b> (${Math.round(pred.prob * 100)} %)`}
+        ${pred && html` · síť: <b>${displayValue(field, pred.label)}</b> (${Math.round(pred.prob * 100)} %${pred.sure ? '' : ', nejistá'})`}
         ${knownValue && html` · v paměti: ${knownValue}`}
       </div>`;
   }
@@ -1113,8 +1113,9 @@ export function Trainer({ onClose }) {
           ${field.type === 'weight' ? weightPanel() : field.type === 'revision' ? revisionPanel() : field.type === 'loadbrake' ? loadPanel()
             : field.type === 'force' ? forcePanel() : field.type === 'switch'
             ? html`<${Seg} value=${choice} options=${field.options} bad=${field.bad} onChange=${(v) => { setChoice(v); setTouched(true); }} />
-                <div class="hint">${pred ? html`Síť odhaduje <b>${displayValue(field, pred.label)}</b> (${Math.round(pred.prob * 100)} %).`
-                  : cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>.`
+                <div class="hint">${cand ? html`Aplikace čte: <b>${displayValue(field, cand.value)}</b>.`
+                  : pred?.sure ? html`Síť odhaduje <b>${displayValue(field, pred.label)}</b> (${Math.round(pred.prob * 100)} %) – zkontrolujte a potvrďte.`
+                  : pred ? html`Síť si není jistá (<b>${displayValue(field, pred.label)}</b> ${Math.round(pred.prob * 100)} %) – zvolte, v jaké poloze páka je.`
                   : field.key === 'rezim' || field.key === 'kohout' ? 'Namiřte na páku a zvolte, v jaké je poloze – snímek se uloží pro trénink.'
                   : 'Namiřte kameru a zvolte tlačítkem – snímek se uloží pro trénink.'}
                   ${knownValue && html` · v paměti: ${knownValue}`}</div>`
